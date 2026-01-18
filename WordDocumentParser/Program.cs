@@ -1,0 +1,397 @@
+using System;
+using System.IO;
+using System.Linq;
+
+namespace WordDocumentParser
+{
+    /// <summary>
+    /// Demonstration program showing how to use the Word Document Tree Parser and Writer
+    /// </summary>
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            // Example usage with a file path
+            string x = "C:\\isolated\\FDE EM SD v3.docx";
+            if (File.Exists(x))
+            {
+                ParseAndDisplayDocument(x);
+
+                // Demo: Write the parsed document back to a new file
+                Console.WriteLine("\n\nWriting Document Demo:");
+                Console.WriteLine("======================");
+                DemoWriteDocument(x);
+            }
+            else
+            {
+                Console.WriteLine("Word Document Tree Parser & Writer - Usage Examples");
+                Console.WriteLine("===================================================\n");
+
+                // Show example code
+                ShowExampleUsage();
+
+                // Demo: Create a document from scratch
+                Console.WriteLine("\n\nCreating Sample Document:");
+                Console.WriteLine("=========================");
+                DemoCreateDocument();
+            }
+        }
+
+        /// <summary>
+        /// Demonstrates writing a parsed document back to a new file
+        /// </summary>
+        static void DemoWriteDocument(string inputPath)
+        {
+            using var parser = new WordDocumentTreeParser();
+            var documentTree = parser.ParseFromFile(inputPath);
+
+            var outputPath = Path.Combine(Path.GetDirectoryName(inputPath)!,
+                Path.GetFileNameWithoutExtension(inputPath) + "_copy.docx");
+
+            documentTree.SaveToFile(outputPath);
+            Console.WriteLine($"Document saved to: {outputPath}");
+        }
+
+        /// <summary>
+        /// Demonstrates creating a document from scratch using the tree structure
+        /// </summary>
+        static void DemoCreateDocument()
+        {
+            // Create a new document tree programmatically
+            var root = new DocumentNode(ContentType.Document, "Sample Document");
+
+            // Add Introduction section
+            var intro = new DocumentNode(ContentType.Heading, 1, "Introduction");
+            root.AddChild(intro);
+            intro.AddChild(new DocumentNode(ContentType.Paragraph,
+                "This document was created programmatically using WordDocumentTreeWriter."));
+            intro.AddChild(new DocumentNode(ContentType.Paragraph,
+                "It demonstrates the ability to generate Word documents from a tree structure."));
+
+            // Add a subsection
+            var background = new DocumentNode(ContentType.Heading, 2, "Background");
+            intro.AddChild(background);
+            background.AddChild(new DocumentNode(ContentType.Paragraph,
+                "The document tree structure follows the heading hierarchy of the document."));
+
+            // Add Methods section with a table
+            var methods = new DocumentNode(ContentType.Heading, 1, "Methods");
+            root.AddChild(methods);
+            methods.AddChild(new DocumentNode(ContentType.Paragraph,
+                "The following table shows our methodology:"));
+
+            // Create a sample table
+            var tableNode = CreateSampleTable();
+            methods.AddChild(tableNode);
+
+            // Add Results section with list items
+            var results = new DocumentNode(ContentType.Heading, 1, "Results");
+            root.AddChild(results);
+            results.AddChild(new DocumentNode(ContentType.Paragraph, "Key findings include:"));
+
+            var item1 = new DocumentNode(ContentType.ListItem, "First finding: Improved efficiency");
+            item1.Metadata["ListLevel"] = 0;
+            item1.Metadata["ListId"] = 1;
+            results.AddChild(item1);
+
+            var item2 = new DocumentNode(ContentType.ListItem, "Second finding: Better accuracy");
+            item2.Metadata["ListLevel"] = 0;
+            item2.Metadata["ListId"] = 1;
+            results.AddChild(item2);
+
+            var item3 = new DocumentNode(ContentType.ListItem, "Third finding: Reduced costs");
+            item3.Metadata["ListLevel"] = 0;
+            item3.Metadata["ListId"] = 1;
+            results.AddChild(item3);
+
+            // Add Conclusion
+            var conclusion = new DocumentNode(ContentType.Heading, 1, "Conclusion");
+            root.AddChild(conclusion);
+            conclusion.AddChild(new DocumentNode(ContentType.Paragraph,
+                "This demonstrates the round-trip capability of parsing and writing Word documents."));
+
+            // Save the document
+            var outputPath = Path.Combine(Environment.CurrentDirectory, "SampleDocument.docx");
+            root.SaveToFile(outputPath);
+            Console.WriteLine($"Sample document created: {outputPath}");
+
+            // Display the tree structure
+            Console.WriteLine("\nDocument Tree Structure:");
+            Console.WriteLine(root.ToTreeString());
+        }
+
+        /// <summary>
+        /// Creates a sample table node with data
+        /// </summary>
+        static DocumentNode CreateSampleTable()
+        {
+            var tableData = new TableData { ColumnCount = 3 };
+
+            // Header row
+            var headerRow = new TableRow { RowIndex = 0, IsHeader = true };
+            headerRow.Cells.Add(CreateCell(0, 0, "Step"));
+            headerRow.Cells.Add(CreateCell(0, 1, "Description"));
+            headerRow.Cells.Add(CreateCell(0, 2, "Duration"));
+            tableData.Rows.Add(headerRow);
+
+            // Data rows
+            var row1 = new TableRow { RowIndex = 1 };
+            row1.Cells.Add(CreateCell(1, 0, "1"));
+            row1.Cells.Add(CreateCell(1, 1, "Data Collection"));
+            row1.Cells.Add(CreateCell(1, 2, "2 weeks"));
+            tableData.Rows.Add(row1);
+
+            var row2 = new TableRow { RowIndex = 2 };
+            row2.Cells.Add(CreateCell(2, 0, "2"));
+            row2.Cells.Add(CreateCell(2, 1, "Analysis"));
+            row2.Cells.Add(CreateCell(2, 2, "3 weeks"));
+            tableData.Rows.Add(row2);
+
+            var row3 = new TableRow { RowIndex = 3 };
+            row3.Cells.Add(CreateCell(3, 0, "3"));
+            row3.Cells.Add(CreateCell(3, 1, "Report Writing"));
+            row3.Cells.Add(CreateCell(3, 2, "1 week"));
+            tableData.Rows.Add(row3);
+
+            var tableNode = new DocumentNode(ContentType.Table, $"[Table: {tableData.RowCount}x{tableData.ColumnCount}]");
+            tableNode.Metadata["TableData"] = tableData;
+            tableNode.Metadata["RowCount"] = tableData.RowCount;
+            tableNode.Metadata["ColumnCount"] = tableData.ColumnCount;
+
+            return tableNode;
+        }
+
+        static TableCell CreateCell(int row, int col, string text)
+        {
+            var cell = new TableCell { RowIndex = row, ColumnIndex = col };
+            cell.Content.Add(new DocumentNode(ContentType.Paragraph, text));
+            return cell;
+        }
+
+        static void ParseAndDisplayDocument(string filePath)
+        {
+            Console.WriteLine($"Parsing: {filePath}\n");
+
+            using var parser = new WordDocumentTreeParser();
+            var documentTree = parser.ParseFromFile(filePath);
+
+            // Display the tree structure
+            Console.WriteLine("Document Tree Structure:");
+            Console.WriteLine("========================");
+            Console.WriteLine(documentTree.ToTreeString());
+
+            // Display statistics
+            Console.WriteLine("\nDocument Statistics:");
+            Console.WriteLine("====================");
+            var counts = documentTree.CountByType();
+            foreach (var kvp in counts.OrderBy(k => k.Key.ToString()))
+            {
+                Console.WriteLine($"  {kvp.Key}: {kvp.Value}");
+            }
+
+            // Display table of contents
+            var toc = documentTree.GetTableOfContents();
+            if (toc.Any())
+            {
+                Console.WriteLine("\nTable of Contents:");
+                Console.WriteLine("==================");
+                foreach (var (level, title, _) in toc)
+                {
+                    var indent = new string(' ', (level - 1) * 2);
+                    Console.WriteLine($"{indent}{level}. {title}");
+                }
+            }
+
+            // Display tables info
+            var tables = documentTree.GetAllTables().ToList();
+            if (tables.Any())
+            {
+                Console.WriteLine($"\nTables Found: {tables.Count}");
+                Console.WriteLine("=============");
+                int tableNum = 1;
+                foreach (var table in tables)
+                {
+                    var tableData = table.GetTableData();
+                    if (tableData != null)
+                    {
+                        Console.WriteLine($"  Table {tableNum}: {tableData.RowCount} rows × {tableData.ColumnCount} columns");
+                        Console.WriteLine($"    Location: {table.GetHeadingPath()}");
+                    }
+                    tableNum++;
+                }
+            }
+
+            // Display images info
+            var images = documentTree.GetAllImages().ToList();
+            if (images.Any())
+            {
+                Console.WriteLine($"\nImages Found: {images.Count}");
+                Console.WriteLine("=============");
+                foreach (var image in images)
+                {
+                    var imageData = image.GetImageData();
+                    if (imageData != null)
+                    {
+                        Console.WriteLine($"  - {imageData.Name}: {imageData.WidthInches:F1}\" × {imageData.HeightInches:F1}\" ({imageData.ContentType})");
+                        Console.WriteLine($"    Location: {image.GetHeadingPath()}");
+                    }
+                }
+            }
+        }
+
+        static void ShowExampleUsage()
+        {
+            Console.WriteLine(@"
+// Basic Usage - Parse a Word document
+using var parser = new WordDocumentTreeParser();
+var documentTree = parser.ParseFromFile(""document.docx"");
+
+// The tree structure follows heading hierarchy:
+// Document (root)
+//   ├── H1: Introduction
+//   │     ├── Paragraph: Some text...
+//   │     ├── H2: Background
+//   │     │     ├── Paragraph: More text...
+//   │     │     └── Table: [Table: 3x4]
+//   │     └── H2: Purpose
+//   │           └── Paragraph: Purpose text...
+//   └── H1: Methods
+//         ├── H2: Data Collection
+//         │     └── Image: [Image: figure1.png]
+//         └── H2: Analysis
+//               └── Paragraph: Analysis details...
+
+// Print the tree structure
+Console.WriteLine(documentTree.ToTreeString());
+
+// Find all headings
+var allHeadings = documentTree.GetAllHeadings();
+foreach (var heading in allHeadings)
+{
+    Console.WriteLine($""H{heading.HeadingLevel}: {heading.Text}"");
+}
+
+// Get specific heading level
+var h2Headings = documentTree.GetHeadingsAtLevel(2);
+
+// Find a section by name
+var methodsSection = documentTree.GetSection(""Methods"");
+if (methodsSection != null)
+{
+    // Get all text under this section
+    var sectionText = methodsSection.GetAllText();
+    Console.WriteLine($""Methods section content:\n{sectionText}"");
+}
+
+// Work with tables
+var tables = documentTree.GetAllTables();
+foreach (var tableNode in tables)
+{
+    var tableData = tableNode.GetTableData();
+    if (tableData != null)
+    {
+        // Access as 2D array
+        var array = tableData.ToTextArray();
+        Console.WriteLine($""Cell [0,0]: {array[0, 0]}"");
+        
+        // Or iterate rows/cells
+        foreach (var row in tableData.Rows)
+        {
+            foreach (var cell in row.Cells)
+            {
+                Console.WriteLine($""Row {cell.RowIndex}, Col {cell.ColumnIndex}: {cell.TextContent}"");
+            }
+        }
+    }
+}
+
+// Work with images
+var images = documentTree.GetAllImages();
+foreach (var imageNode in images)
+{
+    var imageData = imageNode.GetImageData();
+    if (imageData?.Data != null)
+    {
+        // Save image to file
+        File.WriteAllBytes($""{imageData.Name}"", imageData.Data);
+    }
+}
+
+// Navigation
+var node = documentTree.FindFirst(n => n.Text.Contains(""specific text""));
+if (node != null)
+{
+    // Get breadcrumb path
+    var path = node.GetHeadingPath(); // ""Document > Introduction > Background""
+    
+    // Navigate to parent
+    var parent = node.Parent;
+    
+    // Get siblings
+    var siblings = node.GetSiblings();
+    var nextSibling = node.GetNextSibling();
+}
+
+// Custom search
+var paragraphsWithLinks = documentTree.FindAll(n => 
+    n.Type == ContentType.Paragraph && 
+    n.Metadata.ContainsKey(""HasHyperlinks""));
+
+// Statistics
+var stats = documentTree.CountByType();
+Console.WriteLine($""Total paragraphs: {stats[ContentType.Paragraph]}"");
+Console.WriteLine($""Total tables: {stats[ContentType.Table]}"");
+
+// ============================================
+// WRITING DOCUMENTS
+// ============================================
+
+// Save a parsed document back to a new file
+documentTree.SaveToFile(""output.docx"");
+
+// Or save to a stream
+using var stream = new MemoryStream();
+documentTree.SaveToStream(stream);
+
+// Or get as byte array
+var bytes = documentTree.ToDocxBytes();
+
+// Create a new document from scratch
+var newDoc = new DocumentNode(ContentType.Document, ""My Document"");
+
+// Add a heading
+var heading = new DocumentNode(ContentType.Heading, 1, ""Chapter 1"");
+newDoc.AddChild(heading);
+
+// Add paragraphs under the heading
+heading.AddChild(new DocumentNode(ContentType.Paragraph, ""This is the first paragraph.""));
+heading.AddChild(new DocumentNode(ContentType.Paragraph, ""This is the second paragraph.""));
+
+// Add a sub-heading
+var subHeading = new DocumentNode(ContentType.Heading, 2, ""Section 1.1"");
+heading.AddChild(subHeading);
+subHeading.AddChild(new DocumentNode(ContentType.Paragraph, ""Content under section 1.1""));
+
+// Add list items
+var listItem = new DocumentNode(ContentType.ListItem, ""First bullet point"");
+listItem.Metadata[""ListLevel""] = 0;
+listItem.Metadata[""ListId""] = 1;
+heading.AddChild(listItem);
+
+// Create a table
+var tableData = new TableData { ColumnCount = 2 };
+var row = new TableRow { RowIndex = 0 };
+row.Cells.Add(new TableCell { RowIndex = 0, ColumnIndex = 0, Content = { new DocumentNode(ContentType.Paragraph, ""Cell 1"") } });
+row.Cells.Add(new TableCell { RowIndex = 0, ColumnIndex = 1, Content = { new DocumentNode(ContentType.Paragraph, ""Cell 2"") } });
+tableData.Rows.Add(row);
+
+var table = new DocumentNode(ContentType.Table, ""[Table]"");
+table.Metadata[""TableData""] = tableData;
+heading.AddChild(table);
+
+// Save the new document
+newDoc.SaveToFile(""new_document.docx"");
+");
+        }
+    }
+}
