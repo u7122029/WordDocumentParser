@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace WordDocumentParser
 {
@@ -9,32 +10,108 @@ namespace WordDocumentParser
     /// </summary>
     class Program
     {
+        private const string SourceDirUrl =
+            "https://hackage-content.haskell.org/package/pandoc-3.8.3/src/test/docx/";
+
+        private const string DownloadFolder = @"C:\isolated";
+
         static void Main(string[] args)
         {
-            // Example usage with a file path
-            string x = "C:\\isolated\\FDE EM SD v3.docx";
-            if (File.Exists(x))
-            {
-                ParseAndDisplayDocument(x);
+            Directory.CreateDirectory(DownloadFolder);
 
-                // Demo: Write the parsed document back to a new file
-                Console.WriteLine("\n\nWriting Document Demo:");
-                Console.WriteLine("======================");
-                DemoWriteDocument(x);
+            // Download and process all .docx files from the pandoc test directory
+            try
+            {
+                var downloadedPaths = DownloadAllDocxFromDirectory(SourceDirUrl, DownloadFolder);
+
+                if (downloadedPaths.Count == 0)
+                {
+                    Console.WriteLine("No .docx files were found to download.");
+                    return;
+                }
+
+                foreach (var path in downloadedPaths)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("===================================================");
+                    Console.WriteLine($"Processing: {path}");
+                    Console.WriteLine("===================================================");
+
+                    ParseAndDisplayDocument(path);
+
+                    Console.WriteLine("\n\nWriting Document Demo:");
+                    Console.WriteLine("======================");
+                    DemoWriteDocument(path);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                Console.WriteLine("Word Document Tree Parser & Writer - Usage Examples");
-                Console.WriteLine("===================================================\n");
+                Console.WriteLine("Failed to download/process documents.");
+                Console.WriteLine(ex);
 
-                // Show example code
+                // Optional fallback: preserve your original behavior
+                Console.WriteLine("\n\nWord Document Tree Parser & Writer - Usage Examples");
+                Console.WriteLine("===================================================\n");
                 ShowExampleUsage();
 
-                // Demo: Create a document from scratch
                 Console.WriteLine("\n\nCreating Sample Document:");
                 Console.WriteLine("=========================");
                 DemoCreateDocument();
             }
+        }
+
+        /// <summary>
+        /// Downloads every *.docx linked on a simple directory listing page into targetFolder.
+        /// Returns full local file paths.
+        /// </summary>
+        private static List<string> DownloadAllDocxFromDirectory(string directoryUrl, string targetFolder)
+        {
+            using var http = new HttpClient();
+
+            // Some servers behave better if a User-Agent is present
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("WordDocumentParser/1.0 (+https://example.local)");
+
+            Console.WriteLine($"Fetching listing: {directoryUrl}");
+            var html = http.GetStringAsync(directoryUrl).GetAwaiter().GetResult();
+
+            // Extract href="something.docx" (also handles single quotes)
+            // This is intentionally lightweight to avoid extra dependencies.
+            var hrefRegex = new Regex(
+                @"href\s*=\s*(['""])(?<href>[^'""]+?\.docx)\1",
+                RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+            var baseUri = new Uri(directoryUrl, UriKind.Absolute);
+
+            var docxUris = hrefRegex.Matches(html)
+                .Select(m => m.Groups["href"].Value)
+                .Select(href => new Uri(baseUri, href)) // resolves relative links
+                .Distinct()
+                .ToList();
+
+            Console.WriteLine($"Found {docxUris.Count} .docx link(s).");
+
+            var downloaded = new List<string>(docxUris.Count);
+
+            foreach (var docxUri in docxUris)
+            {
+                var fileName = Path.GetFileName(docxUri.LocalPath);
+
+                // Very defensive: ensure a usable filename even if URL is odd
+                if (string.IsNullOrWhiteSpace(fileName))
+                    fileName = Guid.NewGuid().ToString("N") + ".docx";
+
+                var localPath = Path.Combine(targetFolder, fileName);
+
+                Console.WriteLine($"Downloading: {docxUri} -> {localPath}");
+
+                // Download bytes and write
+                var bytes = http.GetByteArrayAsync(docxUri).GetAwaiter().GetResult();
+                File.WriteAllBytes(localPath, bytes);
+
+                downloaded.Add(localPath);
+            }
+
+            return downloaded;
         }
 
         /// <summary>
