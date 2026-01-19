@@ -50,6 +50,139 @@ namespace WordDocumentParser
 
             documentTree.SaveToFile(outputPath);
             Console.WriteLine($"Document saved to: {outputPath}");
+
+            // Validate the saved document
+            ValidateDocument(outputPath);
+
+            // Compare specific elements
+            CompareDocuments(inputPath, outputPath);
+        }
+
+        /// <summary>
+        /// Compares specific elements between original and copy
+        /// </summary>
+        static void CompareDocuments(string originalPath, string copyPath)
+        {
+            Console.WriteLine("\nComparing documents...");
+
+            using var origDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(originalPath, false);
+            using var copyDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(copyPath, false);
+
+            var origBody = origDoc.MainDocumentPart?.Document?.Body;
+            var copyBody = copyDoc.MainDocumentPart?.Document?.Body;
+
+            if (origBody == null || copyBody == null)
+            {
+                Console.WriteLine("Could not access document bodies");
+                return;
+            }
+
+            // Count elements
+            var origParas = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.Paragraph>().Count();
+            var copyParas = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.Paragraph>().Count();
+            Console.WriteLine($"Paragraphs: Original={origParas}, Copy={copyParas}");
+
+            var origTables = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.Table>().Count();
+            var copyTables = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.Table>().Count();
+            Console.WriteLine($"Tables: Original={origTables}, Copy={copyTables}");
+
+            // Check for field characters
+            var origFldChar = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>().Count();
+            var copyFldChar = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>().Count();
+            Console.WriteLine($"Field characters: Original={origFldChar}, Copy={copyFldChar}");
+
+            // Check section properties
+            var origSectPr = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>().Count();
+            var copySectPr = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>().Count();
+            Console.WriteLine($"Section properties: Original={origSectPr}, Copy={copySectPr}");
+
+            // Check section properties locations
+            Console.WriteLine("\nOriginal section properties locations:");
+            int idx = 0;
+            foreach (var sectPr in origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>())
+            {
+                var parent = sectPr.Parent;
+                var grandParent = parent?.Parent;
+                Console.WriteLine($"  {idx++}: Parent={parent?.GetType().Name}, GrandParent={grandParent?.GetType().Name}");
+            }
+
+            Console.WriteLine("\nCopy section properties locations:");
+            idx = 0;
+            foreach (var sectPr in copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.SectionProperties>())
+            {
+                var parent = sectPr.Parent;
+                var grandParent = parent?.Parent;
+                Console.WriteLine($"  {idx++}: Parent={parent?.GetType().Name}, GrandParent={grandParent?.GetType().Name}");
+            }
+
+            // Check if any paragraphs contain sectPr in original
+            var parasWithSectPr = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.Paragraph>()
+                .Where(p => p.ParagraphProperties?.SectionProperties != null)
+                .Count();
+            Console.WriteLine($"\nParagraphs with section properties in original: {parasWithSectPr}");
+
+            // Check TOC field structure
+            Console.WriteLine("\nField structure analysis:");
+            var origInstrTexts = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Select(f => f.Text?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t) && t.Contains("TOC"))
+                .ToList();
+            var copyInstrTexts = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Select(f => f.Text?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t) && t.Contains("TOC"))
+                .ToList();
+            Console.WriteLine($"TOC field instructions in original: {origInstrTexts.Count}");
+            Console.WriteLine($"TOC field instructions in copy: {copyInstrTexts.Count}");
+            if (origInstrTexts.Count > 0)
+                Console.WriteLine($"  Original TOC: {origInstrTexts[0]}");
+            if (copyInstrTexts.Count > 0)
+                Console.WriteLine($"  Copy TOC: {copyInstrTexts[0]}");
+
+            // Check for field begin/end balance
+            var origBegin = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>()
+                .Count(f => f.FieldCharType?.Value == DocumentFormat.OpenXml.Wordprocessing.FieldCharValues.Begin);
+            var origEnd = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>()
+                .Count(f => f.FieldCharType?.Value == DocumentFormat.OpenXml.Wordprocessing.FieldCharValues.End);
+            var copyBegin = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>()
+                .Count(f => f.FieldCharType?.Value == DocumentFormat.OpenXml.Wordprocessing.FieldCharValues.Begin);
+            var copyEnd = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldChar>()
+                .Count(f => f.FieldCharType?.Value == DocumentFormat.OpenXml.Wordprocessing.FieldCharValues.End);
+            Console.WriteLine($"\nField balance - Original: Begin={origBegin}, End={origEnd}");
+            Console.WriteLine($"Field balance - Copy: Begin={copyBegin}, End={copyEnd}");
+        }
+
+        /// <summary>
+        /// Validates a Word document and reports any errors
+        /// </summary>
+        static void ValidateDocument(string filePath)
+        {
+            Console.WriteLine("\nValidating document...");
+            using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(filePath, false);
+            var validator = new DocumentFormat.OpenXml.Validation.OpenXmlValidator();
+            var errors = validator.Validate(doc);
+
+            if (!errors.Any())
+            {
+                Console.WriteLine("Document is valid - no errors found.");
+            }
+            else
+            {
+                Console.WriteLine($"Found {errors.Count()} validation errors:");
+                foreach (var error in errors.Take(20))
+                {
+                    Console.WriteLine($"  - {error.Description}");
+                    if (error.Node != null)
+                    {
+                        var xml = error.Node.OuterXml;
+                        if (xml.Length > 100) xml = xml.Substring(0, 100) + "...";
+                        Console.WriteLine($"    Node: {xml}");
+                    }
+                }
+                if (errors.Count() > 20)
+                {
+                    Console.WriteLine($"  ... and {errors.Count() - 20} more errors");
+                }
+            }
         }
 
         /// <summary>

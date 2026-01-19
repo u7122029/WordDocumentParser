@@ -22,6 +22,8 @@ namespace WordDocumentParser
         private readonly Dictionary<string, string> _hyperlinkRelationships = new Dictionary<string, string>();
         private readonly Dictionary<string, string> _imageRelationshipMapping = new Dictionary<string, string>();
         private readonly Dictionary<string, string> _hyperlinkRelationshipMapping = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _headerRelationshipMapping = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _footerRelationshipMapping = new Dictionary<string, string>();
         private DocumentPackageData? _packageData;
 
         /// <summary>
@@ -65,6 +67,13 @@ namespace WordDocumentParser
         /// </summary>
         private void BuildDocument(DocumentNode root)
         {
+            // Clear mappings for fresh document
+            _imageRelationshipMapping.Clear();
+            _hyperlinkRelationshipMapping.Clear();
+            _hyperlinkRelationships.Clear();
+            _headerRelationshipMapping.Clear();
+            _footerRelationshipMapping.Clear();
+
             _packageData = root.PackageData;
             _mainPart = _document!.AddMainDocumentPart();
             _mainPart.Document = new Document();
@@ -99,11 +108,14 @@ namespace WordDocumentParser
         /// </summary>
         private void RestoreDocumentParts()
         {
-            // Restore styles
+            // Restore styles (clean XML attributes)
             if (!string.IsNullOrEmpty(_packageData!.StylesXml))
             {
                 var stylesPart = _mainPart!.AddNewPart<StyleDefinitionsPart>();
-                stylesPart.Styles = new Styles(_packageData.StylesXml);
+                var cleanedStylesXml = CleanXmlAttributes(_packageData.StylesXml);
+                stylesPart.Styles = new Styles(cleanedStylesXml);
+                // Fix any remaining indentation attributes in styles
+                FixIndentationAttributes(stylesPart.Styles);
             }
             else
             {
@@ -114,50 +126,58 @@ namespace WordDocumentParser
             if (!string.IsNullOrEmpty(_packageData.ThemeXml))
             {
                 var themePart = _mainPart!.AddNewPart<ThemePart>();
-                using var reader = new StringReader(_packageData.ThemeXml);
-                themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(_packageData.ThemeXml);
+                var cleanedThemeXml = CleanXmlAttributes(_packageData.ThemeXml);
+                themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(cleanedThemeXml);
             }
 
             // Restore font table
             if (!string.IsNullOrEmpty(_packageData.FontTableXml))
             {
                 var fontTablePart = _mainPart!.AddNewPart<FontTablePart>();
-                fontTablePart.Fonts = new Fonts(_packageData.FontTableXml);
+                var cleanedFontTableXml = CleanXmlAttributes(_packageData.FontTableXml);
+                fontTablePart.Fonts = new Fonts(cleanedFontTableXml);
             }
 
-            // Restore numbering definitions
+            // Restore numbering definitions (clean XML attributes - this is where w:start errors come from)
             if (!string.IsNullOrEmpty(_packageData.NumberingXml))
             {
                 _numberingPart = _mainPart!.AddNewPart<NumberingDefinitionsPart>();
-                _numberingPart.Numbering = new Numbering(_packageData.NumberingXml);
+                var cleanedNumberingXml = CleanXmlAttributes(_packageData.NumberingXml);
+                _numberingPart.Numbering = new Numbering(cleanedNumberingXml);
+                // Fix any remaining indentation attributes
+                FixIndentationAttributes(_numberingPart.Numbering);
             }
 
-            // Restore document settings
+            // Restore document settings (clean XML attributes)
             if (!string.IsNullOrEmpty(_packageData.SettingsXml))
             {
                 var settingsPart = _mainPart!.AddNewPart<DocumentSettingsPart>();
-                settingsPart.Settings = new Settings(_packageData.SettingsXml);
+                var cleanedSettingsXml = CleanXmlAttributes(_packageData.SettingsXml);
+                settingsPart.Settings = new Settings(cleanedSettingsXml);
             }
 
             // Restore web settings
             if (!string.IsNullOrEmpty(_packageData.WebSettingsXml))
             {
                 var webSettingsPart = _mainPart!.AddNewPart<WebSettingsPart>();
-                webSettingsPart.WebSettings = new WebSettings(_packageData.WebSettingsXml);
+                var cleanedWebSettingsXml = CleanXmlAttributes(_packageData.WebSettingsXml);
+                webSettingsPart.WebSettings = new WebSettings(cleanedWebSettingsXml);
             }
 
             // Restore footnotes
             if (!string.IsNullOrEmpty(_packageData.FootnotesXml))
             {
                 var footnotesPart = _mainPart!.AddNewPart<FootnotesPart>();
-                footnotesPart.Footnotes = new Footnotes(_packageData.FootnotesXml);
+                var cleanedFootnotesXml = CleanXmlAttributes(_packageData.FootnotesXml);
+                footnotesPart.Footnotes = new Footnotes(cleanedFootnotesXml);
             }
 
             // Restore endnotes
             if (!string.IsNullOrEmpty(_packageData.EndnotesXml))
             {
                 var endnotesPart = _mainPart!.AddNewPart<EndnotesPart>();
-                endnotesPart.Endnotes = new Endnotes(_packageData.EndnotesXml);
+                var cleanedEndnotesXml = CleanXmlAttributes(_packageData.EndnotesXml);
+                endnotesPart.Endnotes = new Endnotes(cleanedEndnotesXml);
             }
 
             // Restore images and create relationship mapping
@@ -194,20 +214,26 @@ namespace WordDocumentParser
                 }
             }
 
-            // Restore headers
+            // Restore headers and create relationship mapping
             foreach (var kvp in _packageData.Headers)
             {
+                var originalRelId = kvp.Key;
                 var headerPart = _mainPart!.AddNewPart<HeaderPart>();
                 var headerXml = UpdateImageRelationships(kvp.Value);
                 headerPart.Header = new Header(headerXml);
+                var newRelId = _mainPart.GetIdOfPart(headerPart);
+                _headerRelationshipMapping[originalRelId] = newRelId;
             }
 
-            // Restore footers
+            // Restore footers and create relationship mapping
             foreach (var kvp in _packageData.Footers)
             {
+                var originalRelId = kvp.Key;
                 var footerPart = _mainPart!.AddNewPart<FooterPart>();
                 var footerXml = UpdateImageRelationships(kvp.Value);
                 footerPart.Footer = new Footer(footerXml);
+                var newRelId = _mainPart.GetIdOfPart(footerPart);
+                _footerRelationshipMapping[originalRelId] = newRelId;
             }
 
             // Restore custom XML parts
@@ -241,20 +267,115 @@ namespace WordDocumentParser
         }
 
         /// <summary>
-        /// Updates image relationship IDs in XML content to use new relationship IDs
+        /// Cleans problematic attributes from XML content without updating relationships
+        /// </summary>
+        private static string CleanXmlAttributes(string xml)
+        {
+            var result = xml;
+
+            // Remove ALL w14: prefixed attributes (Word 2010 tracking attributes)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w14:[a-zA-Z0-9]+=""[^""]*""", "");
+
+            // Remove w14: prefixed elements (self-closing and opening/closing pairs)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*/\s*>", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*>.*?</w14:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            // Remove wp14: prefixed attributes (Word 2010 drawing extensions)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+wp14:[a-zA-Z0-9]+=""[^""]*""", "");
+
+            // Remove w15/w16 prefixed attributes (Word 2013/2016 extensions)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w15:[a-zA-Z0-9]+=""[^""]*""", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w16[a-z]*:[a-zA-Z0-9]+=""[^""]*""", "");
+
+            // Remove w15: prefixed elements
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*/\s*>", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*>.*?</w15:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            // Remove w16 prefixed elements (w16, w16se, w16cid, etc.)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*/\s*>", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*>.*?</w16[a-z]*:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+
+            // Remove namespace declarations for removed prefixes
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w14=""[^""]*""", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:wp14=""[^""]*""", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w15=""[^""]*""", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w16[a-z]*=""[^""]*""", "");
+
+            // Remove rsid attributes (revision save IDs - not essential for display)
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:rsid[A-Za-z]*=""[^""]*""", "");
+
+            // Remove w:start and w:end attributes entirely (Word 2010 RTL support - causes validation errors)
+            // The SDK will fall back to w:left/w:right which are the standard attributes
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:start=""[^""]*""", "");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:end=""[^""]*""", "");
+
+            // Clean mc:Ignorable attribute to remove references to namespaces we're stripping
+            // This handles attributes like mc:Ignorable="w14 w15 w16se w16cid w16 w16cex w16sdtdh w16sdtfl w16du"
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"mc:Ignorable=""[^""]*""", @"mc:Ignorable=""""");
+
+            // Clean Requires attributes in mc:Choice elements to remove undefined prefixes
+            // This is safer than trying to remove entire AlternateContent blocks
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wps""", @"Requires=""""");
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wpc""", @"Requires=""""");
+
+            return result;
+        }
+
+        /// <summary>
+        /// Fixes Indentation elements that use Start/End instead of Left/Right
+        /// </summary>
+        private static void FixIndentationAttributes(OpenXmlElement element)
+        {
+            foreach (var ind in element.Descendants<Indentation>())
+            {
+                // Convert Start to Left if Start is set but Left is not
+                if (ind.Start != null && ind.Left == null)
+                {
+                    ind.Left = ind.Start.Value;
+                    ind.Start = null;
+                }
+                // Convert End to Right if End is set but Right is not
+                if (ind.End != null && ind.Right == null)
+                {
+                    ind.Right = ind.End.Value;
+                    ind.End = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates relationship IDs and cleans problematic attributes in XML content
         /// </summary>
         private string UpdateImageRelationships(string xml)
         {
-            if (_imageRelationshipMapping.Count == 0)
-                return xml;
+            // First clean problematic attributes
+            var result = CleanXmlAttributes(xml);
 
-            var result = xml;
+            // Update image relationship IDs
             foreach (var kvp in _imageRelationshipMapping)
             {
-                // Replace relationship IDs in embed attributes
                 result = result.Replace($"r:embed=\"{kvp.Key}\"", $"r:embed=\"{kvp.Value}\"");
                 result = result.Replace($"r:id=\"{kvp.Key}\"", $"r:id=\"{kvp.Value}\"");
             }
+
+            // Update hyperlink relationship IDs
+            foreach (var kvp in _hyperlinkRelationshipMapping)
+            {
+                result = result.Replace($"r:id=\"{kvp.Key}\"", $"r:id=\"{kvp.Value}\"");
+            }
+
+            // Update header relationship IDs (for section properties in paragraphs)
+            foreach (var kvp in _headerRelationshipMapping)
+            {
+                result = result.Replace($"r:id=\"{kvp.Key}\"", $"r:id=\"{kvp.Value}\"");
+            }
+
+            // Update footer relationship IDs (for section properties in paragraphs)
+            foreach (var kvp in _footerRelationshipMapping)
+            {
+                result = result.Replace($"r:id=\"{kvp.Key}\"", $"r:id=\"{kvp.Value}\"");
+            }
+
             return result;
         }
 
@@ -263,69 +384,30 @@ namespace WordDocumentParser
         /// </summary>
         private void RestoreDocumentProperties()
         {
-            // Restore core properties
+            // Restore only essential core properties
+            // Extended properties (Pages, Words, etc.) will be regenerated by Word
+            // Custom properties are skipped to avoid format issues
             if (_packageData?.CoreProperties != null)
             {
                 var props = _document!.PackageProperties;
                 var core = _packageData.CoreProperties;
 
+                // Only restore text-based properties that don't cause validation issues
                 if (!string.IsNullOrEmpty(core.Title)) props.Title = core.Title;
                 if (!string.IsNullOrEmpty(core.Subject)) props.Subject = core.Subject;
                 if (!string.IsNullOrEmpty(core.Creator)) props.Creator = core.Creator;
                 if (!string.IsNullOrEmpty(core.Keywords)) props.Keywords = core.Keywords;
                 if (!string.IsNullOrEmpty(core.Description)) props.Description = core.Description;
-                if (!string.IsNullOrEmpty(core.LastModifiedBy)) props.LastModifiedBy = core.LastModifiedBy;
-                if (!string.IsNullOrEmpty(core.Revision)) props.Revision = core.Revision;
                 if (!string.IsNullOrEmpty(core.Category)) props.Category = core.Category;
-                if (!string.IsNullOrEmpty(core.ContentStatus)) props.ContentStatus = core.ContentStatus;
 
-                if (!string.IsNullOrEmpty(core.Created) && DateTime.TryParse(core.Created, out var created))
-                    props.Created = created;
-                if (!string.IsNullOrEmpty(core.Modified) && DateTime.TryParse(core.Modified, out var modified))
-                    props.Modified = modified;
+                // Note: We intentionally skip LastModifiedBy, Revision, ContentStatus, Created, Modified
+                // as these can cause "Summary Info" repair warnings in some cases
             }
 
-            // Restore extended properties
-            if (_packageData?.ExtendedProperties != null)
-            {
-                var extPart = _document!.AddExtendedFilePropertiesPart();
-                var extProps = new DocumentFormat.OpenXml.ExtendedProperties.Properties();
-                var ext = _packageData.ExtendedProperties;
+            // Skip extended properties - Word will regenerate them automatically
+            // This avoids element ordering issues that cause "Summary Info" repair warnings
 
-                if (!string.IsNullOrEmpty(ext.Template))
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Template(ext.Template));
-                if (!string.IsNullOrEmpty(ext.Application))
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Application(ext.Application));
-                if (!string.IsNullOrEmpty(ext.AppVersion))
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.ApplicationVersion(ext.AppVersion));
-                if (!string.IsNullOrEmpty(ext.Company))
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Company(ext.Company));
-                if (!string.IsNullOrEmpty(ext.Manager))
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Manager(ext.Manager));
-                if (ext.Pages.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Pages(ext.Pages.Value.ToString()));
-                if (ext.Words.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Words(ext.Words.Value.ToString()));
-                if (ext.Characters.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Characters(ext.Characters.Value.ToString()));
-                if (ext.CharactersWithSpaces.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.CharactersWithSpaces(ext.CharactersWithSpaces.Value.ToString()));
-                if (ext.Lines.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Lines(ext.Lines.Value.ToString()));
-                if (ext.Paragraphs.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.Paragraphs(ext.Paragraphs.Value.ToString()));
-                if (ext.TotalTime.HasValue)
-                    extProps.Append(new DocumentFormat.OpenXml.ExtendedProperties.TotalTime(ext.TotalTime.Value.ToString()));
-
-                extPart.Properties = extProps;
-            }
-
-            // Restore custom properties
-            if (!string.IsNullOrEmpty(_packageData?.CustomPropertiesXml))
-            {
-                var customPart = _document!.AddCustomFilePropertiesPart();
-                customPart.Properties = new DocumentFormat.OpenXml.CustomProperties.Properties(_packageData.CustomPropertiesXml);
-            }
+            // Skip custom properties - they can contain format-specific issues
         }
 
         /// <summary>
@@ -474,6 +556,7 @@ namespace WordDocumentParser
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
                 var paragraph = new Paragraph(updatedXml);
+                FixIndentationAttributes(paragraph);
                 _body!.Append(paragraph);
             }
             else
@@ -520,6 +603,7 @@ namespace WordDocumentParser
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
                 var paragraph = new Paragraph(updatedXml);
+                FixIndentationAttributes(paragraph);
                 _body!.Append(paragraph);
             }
             else
@@ -1004,6 +1088,7 @@ namespace WordDocumentParser
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
                 var originalTable = new Table(updatedXml);
+                FixIndentationAttributes(originalTable);
                 _body!.Append(originalTable);
                 _body.Append(new Paragraph()); // spacing after table
                 return;
@@ -1602,37 +1687,48 @@ namespace WordDocumentParser
         {
             EnsureNumberingPart();
 
-            var paragraph = new Paragraph();
-
-            // Apply paragraph formatting
-            var paragraphProps = CreateParagraphProperties(node);
-
-            // Ensure list paragraph style and numbering
-            if (paragraphProps.ParagraphStyleId == null)
+            // Use original XML if available for exact round-trip
+            if (!string.IsNullOrEmpty(node.OriginalXml))
             {
-                paragraphProps.Append(new ParagraphStyleId { Val = "ListParagraph" });
+                var updatedXml = UpdateImageRelationships(node.OriginalXml);
+                var paragraph = new Paragraph(updatedXml);
+                FixIndentationAttributes(paragraph);
+                _body!.Append(paragraph);
             }
-
-            var listLevel = 0;
-            if (node.Metadata.TryGetValue("ListLevel", out var levelObj))
+            else
             {
-                listLevel = Convert.ToInt32(levelObj);
+                var paragraph = new Paragraph();
+
+                // Apply paragraph formatting
+                var paragraphProps = CreateParagraphProperties(node);
+
+                // Ensure list paragraph style and numbering
+                if (paragraphProps.ParagraphStyleId == null)
+                {
+                    paragraphProps.Append(new ParagraphStyleId { Val = "ListParagraph" });
+                }
+
+                var listLevel = 0;
+                if (node.Metadata.TryGetValue("ListLevel", out var levelObj))
+                {
+                    listLevel = Convert.ToInt32(levelObj);
+                }
+
+                if (paragraphProps.NumberingProperties == null)
+                {
+                    paragraphProps.Append(new NumberingProperties(
+                        new NumberingLevelReference { Val = listLevel },
+                        new NumberingId { Val = _currentListId }
+                    ));
+                }
+
+                paragraph.Append(paragraphProps);
+
+                // Write formatted runs or plain text
+                WriteRunsOrText(paragraph, node);
+
+                _body!.Append(paragraph);
             }
-
-            if (paragraphProps.NumberingProperties == null)
-            {
-                paragraphProps.Append(new NumberingProperties(
-                    new NumberingLevelReference { Val = listLevel },
-                    new NumberingId { Val = _currentListId }
-                ));
-            }
-
-            paragraph.Append(paragraphProps);
-
-            // Write formatted runs or plain text
-            WriteRunsOrText(paragraph, node);
-
-            _body!.Append(paragraph);
 
             // Process nested children
             foreach (var child in node.Children)
@@ -1692,7 +1788,9 @@ namespace WordDocumentParser
             {
                 // Use the last section properties (main document section)
                 var lastSectPrXml = _packageData.SectionPropertiesXml.Last();
-                var sectionProps = new SectionProperties(lastSectPrXml);
+                // Clean the section properties XML to remove problematic attributes
+                var cleanedSectPrXml = CleanXmlAttributes(lastSectPrXml);
+                var sectionProps = new SectionProperties(cleanedSectPrXml);
 
                 // Update header/footer references if they were restored
                 UpdateSectionHeaderFooterReferences(sectionProps);
@@ -1713,22 +1811,24 @@ namespace WordDocumentParser
         /// </summary>
         private void UpdateSectionHeaderFooterReferences(SectionProperties sectionProps)
         {
-            // Get the header and footer parts with their new relationship IDs
-            var headerParts = _mainPart?.HeaderParts?.ToList() ?? new List<HeaderPart>();
-            var footerParts = _mainPart?.FooterParts?.ToList() ?? new List<FooterPart>();
-
-            // Update header references
-            var headerRefs = sectionProps.Elements<HeaderReference>().ToList();
-            for (int i = 0; i < headerRefs.Count && i < headerParts.Count; i++)
+            // Update header references using the relationship mapping
+            foreach (var headerRef in sectionProps.Elements<HeaderReference>())
             {
-                headerRefs[i].Id = _mainPart!.GetIdOfPart(headerParts[i]);
+                var oldId = headerRef.Id?.Value;
+                if (!string.IsNullOrEmpty(oldId) && _headerRelationshipMapping.TryGetValue(oldId, out var newId))
+                {
+                    headerRef.Id = newId;
+                }
             }
 
-            // Update footer references
-            var footerRefs = sectionProps.Elements<FooterReference>().ToList();
-            for (int i = 0; i < footerRefs.Count && i < footerParts.Count; i++)
+            // Update footer references using the relationship mapping
+            foreach (var footerRef in sectionProps.Elements<FooterReference>())
             {
-                footerRefs[i].Id = _mainPart!.GetIdOfPart(footerParts[i]);
+                var oldId = footerRef.Id?.Value;
+                if (!string.IsNullOrEmpty(oldId) && _footerRelationshipMapping.TryGetValue(oldId, out var newId))
+                {
+                    footerRef.Id = newId;
+                }
             }
         }
 

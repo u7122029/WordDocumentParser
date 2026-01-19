@@ -394,8 +394,16 @@ namespace WordDocumentParser
                                      para.OuterXml.Contains("v:group") ||
                                      para.OuterXml.Contains("v:shape");
 
-            // Skip empty paragraphs (but keep empty headings as structure, and keep complex content)
-            if (string.IsNullOrWhiteSpace(text) && headingLevel == 0 && runs.Count == 0 && !hasComplexContent)
+            // Check for section properties (section breaks) that must be preserved
+            bool hasSectionProperties = para.ParagraphProperties?.SectionProperties != null;
+
+            // Check for field characters (TOC, cross-references, page numbers, etc.)
+            bool hasFieldCharacters = para.Descendants<FieldChar>().Any() ||
+                                      para.Descendants<FieldCode>().Any();
+
+            // Skip empty paragraphs (but keep empty headings, complex content, section breaks, and field characters)
+            if (string.IsNullOrWhiteSpace(text) && headingLevel == 0 && runs.Count == 0 &&
+                !hasComplexContent && !hasSectionProperties && !hasFieldCharacters)
                 return null;
 
             DocumentNode node;
