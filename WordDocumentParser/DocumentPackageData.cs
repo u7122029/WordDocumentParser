@@ -107,6 +107,26 @@ namespace WordDocumentParser
         /// Hyperlink relationships - key is the relationship ID, value is the URL
         /// </summary>
         public Dictionary<string, HyperlinkRelationshipData> HyperlinkRelationships { get; set; } = new Dictionary<string, HyperlinkRelationshipData>();
+
+        /// <summary>
+        /// Glossary document XML (for Quick Parts, building blocks, document property fields)
+        /// </summary>
+        public string? GlossaryDocumentXml { get; set; }
+
+        /// <summary>
+        /// Glossary document styles XML
+        /// </summary>
+        public string? GlossaryStylesXml { get; set; }
+
+        /// <summary>
+        /// Glossary document fonts XML
+        /// </summary>
+        public string? GlossaryFontTableXml { get; set; }
+
+        /// <summary>
+        /// Images from glossary document part - key is relationship ID, value is image data
+        /// </summary>
+        public Dictionary<string, ImagePartData> GlossaryImages { get; set; } = new Dictionary<string, ImagePartData>();
     }
 
     /// <summary>
