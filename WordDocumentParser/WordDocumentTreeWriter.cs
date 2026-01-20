@@ -346,12 +346,18 @@ namespace WordDocumentParser
             // Remove ALL w14: prefixed attributes (Word 2010 tracking attributes)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w14:[a-zA-Z0-9]+=""[^""]*""", "");
 
-            // Remove w14: prefixed elements (self-closing and opening/closing pairs)
+            // Remove w14: prefixed elements (self-closing first, then nested)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*>.*?</w14:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w14:");
 
             // Remove wp14: prefixed attributes (Word 2010 drawing extensions)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+wp14:[a-zA-Z0-9]+=""[^""]*""", "");
+
+            // Remove wp14: prefixed elements (Word 2010 drawing extensions)
+            // Handle self-closing elements first
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<wp14:[^>]*/\s*>", "");
+            // Handle wp14 elements with nested content - need to handle nested wp14 elements properly
+            result = RemoveXmlElements(result, "wp14:");
 
             // Remove w15/w16 prefixed attributes (Word 2013/2016 extensions)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w15:[a-zA-Z0-9]+=""[^""]*""", "");
@@ -359,11 +365,15 @@ namespace WordDocumentParser
 
             // Remove w15: prefixed elements
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*>.*?</w15:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w15:");
 
             // Remove w16 prefixed elements (w16, w16se, w16cid, etc.)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*>.*?</w16[a-z]*:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w16se:");
+            result = RemoveXmlElements(result, "w16cid:");
+            result = RemoveXmlElements(result, "w16cex:");
+            result = RemoveXmlElements(result, "w16sdtdh:");
+            result = RemoveXmlElements(result, "w16:");
 
             // Remove namespace declarations for removed prefixes
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w14=""[^""]*""", "");
@@ -387,6 +397,63 @@ namespace WordDocumentParser
             // This is safer than trying to remove entire AlternateContent blocks
             result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wps""", @"Requires=""""");
             result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wpc""", @"Requires=""""");
+
+            return result;
+        }
+
+        /// <summary>
+        /// Removes XML elements with the specified prefix, handling nested elements properly
+        /// </summary>
+        private static string RemoveXmlElements(string xml, string prefix)
+        {
+            var result = xml;
+            bool changed;
+
+            // Escape the prefix for regex (in case it contains special characters)
+            var escapedPrefix = System.Text.RegularExpressions.Regex.Escape(prefix);
+
+            // Keep iterating until no more elements with the prefix are found
+            // This handles nested elements by removing innermost first
+            do
+            {
+                changed = false;
+                var openTagPattern = $@"<{escapedPrefix}([a-zA-Z0-9]+)(\s[^>]*)?>"; // Match opening tag
+                var regex = new System.Text.RegularExpressions.Regex(openTagPattern);
+                var match = regex.Match(result);
+
+                while (match.Success)
+                {
+                    var tagName = match.Groups[1].Value;
+                    var startIndex = match.Index;
+                    var closeTag = $"</{prefix}{tagName}>";
+                    var closeIndex = result.IndexOf(closeTag, startIndex + match.Length, StringComparison.Ordinal);
+
+                    if (closeIndex > 0)
+                    {
+                        // Check if there's a nested element with the same prefix between open and close
+                        var contentBetween = result.Substring(startIndex + match.Length, closeIndex - startIndex - match.Length);
+                        var nestedMatch = System.Text.RegularExpressions.Regex.Match(contentBetween, $@"<{escapedPrefix}");
+
+                        if (nestedMatch.Success)
+                        {
+                            // There's a nested element, skip this match and try the next one
+                            match = match.NextMatch();
+                            continue;
+                        }
+
+                        // Remove the entire element (from opening tag to closing tag inclusive)
+                        var lengthToRemove = closeIndex + closeTag.Length - startIndex;
+                        result = result.Remove(startIndex, lengthToRemove);
+                        changed = true;
+                        break; // Start over to handle any remaining elements
+                    }
+                    else
+                    {
+                        // No closing tag found, try next match
+                        match = match.NextMatch();
+                    }
+                }
+            } while (changed);
 
             return result;
         }
