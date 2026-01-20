@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace WordDocumentParser
 {
@@ -10,108 +9,32 @@ namespace WordDocumentParser
     /// </summary>
     class Program
     {
-        private const string SourceDirUrl =
-            "https://hackage-content.haskell.org/package/pandoc-3.8.3/src/test/docx/";
-
-        private const string DownloadFolder = @"C:\isolated";
-
         static void Main(string[] args)
         {
-            Directory.CreateDirectory(DownloadFolder);
-
-            // Download and process all .docx files from the pandoc test directory
-            try
+            // Example usage with a file path
+            string x = "C:\\isolated\\test.docx";
+            if (File.Exists(x))
             {
-                var downloadedPaths = DownloadAllDocxFromDirectory(SourceDirUrl, DownloadFolder);
+                ParseAndDisplayDocument(x);
 
-                if (downloadedPaths.Count == 0)
-                {
-                    Console.WriteLine("No .docx files were found to download.");
-                    return;
-                }
-
-                foreach (var path in downloadedPaths)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine("===================================================");
-                    Console.WriteLine($"Processing: {path}");
-                    Console.WriteLine("===================================================");
-
-                    ParseAndDisplayDocument(path);
-
-                    Console.WriteLine("\n\nWriting Document Demo:");
-                    Console.WriteLine("======================");
-                    DemoWriteDocument(path);
-                }
+                // Demo: Write the parsed document back to a new file
+                Console.WriteLine("\n\nWriting Document Demo:");
+                Console.WriteLine("======================");
+                DemoWriteDocument(x);
             }
-            catch (Exception ex)
+            else
             {
-                Console.WriteLine("Failed to download/process documents.");
-                Console.WriteLine(ex);
-
-                // Optional fallback: preserve your original behavior
-                Console.WriteLine("\n\nWord Document Tree Parser & Writer - Usage Examples");
+                Console.WriteLine("Word Document Tree Parser & Writer - Usage Examples");
                 Console.WriteLine("===================================================\n");
+
+                // Show example code
                 ShowExampleUsage();
 
+                // Demo: Create a document from scratch
                 Console.WriteLine("\n\nCreating Sample Document:");
                 Console.WriteLine("=========================");
                 DemoCreateDocument();
             }
-        }
-
-        /// <summary>
-        /// Downloads every *.docx linked on a simple directory listing page into targetFolder.
-        /// Returns full local file paths.
-        /// </summary>
-        private static List<string> DownloadAllDocxFromDirectory(string directoryUrl, string targetFolder)
-        {
-            using var http = new HttpClient();
-
-            // Some servers behave better if a User-Agent is present
-            http.DefaultRequestHeaders.UserAgent.ParseAdd("WordDocumentParser/1.0 (+https://example.local)");
-
-            Console.WriteLine($"Fetching listing: {directoryUrl}");
-            var html = http.GetStringAsync(directoryUrl).GetAwaiter().GetResult();
-
-            // Extract href="something.docx" (also handles single quotes)
-            // This is intentionally lightweight to avoid extra dependencies.
-            var hrefRegex = new Regex(
-                @"href\s*=\s*(['""])(?<href>[^'""]+?\.docx)\1",
-                RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-            var baseUri = new Uri(directoryUrl, UriKind.Absolute);
-
-            var docxUris = hrefRegex.Matches(html)
-                .Select(m => m.Groups["href"].Value)
-                .Select(href => new Uri(baseUri, href)) // resolves relative links
-                .Distinct()
-                .ToList();
-
-            Console.WriteLine($"Found {docxUris.Count} .docx link(s).");
-
-            var downloaded = new List<string>(docxUris.Count);
-
-            foreach (var docxUri in docxUris)
-            {
-                var fileName = Path.GetFileName(docxUri.LocalPath);
-
-                // Very defensive: ensure a usable filename even if URL is odd
-                if (string.IsNullOrWhiteSpace(fileName))
-                    fileName = Guid.NewGuid().ToString("N") + ".docx";
-
-                var localPath = Path.Combine(targetFolder, fileName);
-
-                Console.WriteLine($"Downloading: {docxUri} -> {localPath}");
-
-                // Download bytes and write
-                var bytes = http.GetByteArrayAsync(docxUri).GetAwaiter().GetResult();
-                File.WriteAllBytes(localPath, bytes);
-
-                downloaded.Add(localPath);
-            }
-
-            return downloaded;
         }
 
         /// <summary>
@@ -133,6 +56,44 @@ namespace WordDocumentParser
 
             // Compare specific elements
             CompareDocuments(inputPath, outputPath);
+
+            // Debug document structure
+            Console.WriteLine("\n--- Document Structure Debug ---");
+            DebugDocumentStructure(inputPath, outputPath);
+        }
+
+        /// <summary>
+        /// Debug the document structure to understand missing elements
+        /// </summary>
+        static void DebugDocumentStructure(string originalPath, string copyPath)
+        {
+            using var origDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(originalPath, false);
+            using var copyDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(copyPath, false);
+
+            var origBody = origDoc.MainDocumentPart?.Document?.Body;
+            var copyBody = copyDoc.MainDocumentPart?.Document?.Body;
+
+            if (origBody == null) return;
+
+            Console.WriteLine("\nOriginal document body children:");
+            int i = 0;
+            foreach (var child in origBody.ChildElements)
+            {
+                var typeName = child.GetType().Name;
+                var preview = child.InnerText;
+                if (preview.Length > 60) preview = preview.Substring(0, 60) + "...";
+                Console.WriteLine($"  {i++}: {typeName} - \"{preview}\"");
+            }
+
+            Console.WriteLine("\nCopy document body children:");
+            i = 0;
+            foreach (var child in copyBody!.ChildElements)
+            {
+                var typeName = child.GetType().Name;
+                var preview = child.InnerText;
+                if (preview.Length > 60) preview = preview.Substring(0, 60) + "...";
+                Console.WriteLine($"  {i++}: {typeName} - \"{preview}\"");
+            }
         }
 
         /// <summary>
@@ -144,6 +105,18 @@ namespace WordDocumentParser
 
             using var origDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(originalPath, false);
             using var copyDoc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(copyPath, false);
+
+            // Compare document properties
+            Console.WriteLine("\n--- Document Properties Comparison ---");
+            CompareDocumentProperties(origDoc, copyDoc);
+
+            // Compare dynamic references (DOCPROPERTY fields)
+            Console.WriteLine("\n--- Dynamic Reference Fields ---");
+            CompareDynamicReferences(origDoc, copyDoc);
+
+            // Compare Glossary Document Part
+            Console.WriteLine("\n--- Glossary Document (Building Blocks) ---");
+            CompareGlossaryDocument(origDoc, copyDoc);
 
             var origBody = origDoc.MainDocumentPart?.Document?.Body;
             var copyBody = copyDoc.MainDocumentPart?.Document?.Body;
@@ -226,6 +199,159 @@ namespace WordDocumentParser
                 .Count(f => f.FieldCharType?.Value == DocumentFormat.OpenXml.Wordprocessing.FieldCharValues.End);
             Console.WriteLine($"\nField balance - Original: Begin={origBegin}, End={origEnd}");
             Console.WriteLine($"Field balance - Copy: Begin={copyBegin}, End={copyEnd}");
+        }
+
+        /// <summary>
+        /// Compares document properties between original and copy
+        /// </summary>
+        static void CompareDocumentProperties(
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument origDoc,
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument copyDoc)
+        {
+            // Core properties
+            var origProps = origDoc.PackageProperties;
+            var copyProps = copyDoc.PackageProperties;
+
+            Console.WriteLine("Core Properties:");
+            Console.WriteLine($"  Title: Original=\"{origProps.Title ?? "(null)"}\" | Copy=\"{copyProps.Title ?? "(null)"}\" {(origProps.Title == copyProps.Title ? "[OK]" : "[DIFF]")}");
+            Console.WriteLine($"  Subject: Original=\"{origProps.Subject ?? "(null)"}\" | Copy=\"{copyProps.Subject ?? "(null)"}\" {(origProps.Subject == copyProps.Subject ? "[OK]" : "[DIFF]")}");
+            Console.WriteLine($"  Creator: Original=\"{origProps.Creator ?? "(null)"}\" | Copy=\"{copyProps.Creator ?? "(null)"}\" {(origProps.Creator == copyProps.Creator ? "[OK]" : "[DIFF]")}");
+            Console.WriteLine($"  Keywords: Original=\"{origProps.Keywords ?? "(null)"}\" | Copy=\"{copyProps.Keywords ?? "(null)"}\" {(origProps.Keywords == copyProps.Keywords ? "[OK]" : "[DIFF]")}");
+            Console.WriteLine($"  Category: Original=\"{origProps.Category ?? "(null)"}\" | Copy=\"{copyProps.Category ?? "(null)"}\" {(origProps.Category == copyProps.Category ? "[OK]" : "[DIFF]")}");
+
+            // Extended properties
+            Console.WriteLine("\nExtended Properties:");
+            var origExtProps = origDoc.ExtendedFilePropertiesPart?.Properties;
+            var copyExtProps = copyDoc.ExtendedFilePropertiesPart?.Properties;
+
+            if (origExtProps != null || copyExtProps != null)
+            {
+                Console.WriteLine($"  Company: Original=\"{origExtProps?.Company?.Text ?? "(null)"}\" | Copy=\"{copyExtProps?.Company?.Text ?? "(null)"}\" {(origExtProps?.Company?.Text == copyExtProps?.Company?.Text ? "[OK]" : "[DIFF]")}");
+                Console.WriteLine($"  Template: Original=\"{origExtProps?.Template?.Text ?? "(null)"}\" | Copy=\"{copyExtProps?.Template?.Text ?? "(null)"}\" {(origExtProps?.Template?.Text == copyExtProps?.Template?.Text ? "[OK]" : "[DIFF]")}");
+                Console.WriteLine($"  Manager: Original=\"{origExtProps?.Manager?.Text ?? "(null)"}\" | Copy=\"{copyExtProps?.Manager?.Text ?? "(null)"}\" {(origExtProps?.Manager?.Text == copyExtProps?.Manager?.Text ? "[OK]" : "[DIFF]")}");
+                Console.WriteLine($"  Application: Original=\"{origExtProps?.Application?.Text ?? "(null)"}\" | Copy=\"{copyExtProps?.Application?.Text ?? "(null)"}\"");
+            }
+            else
+            {
+                Console.WriteLine("  (No extended properties found)");
+            }
+
+            // Custom properties
+            Console.WriteLine("\nCustom Properties:");
+            var origCustomProps = origDoc.CustomFilePropertiesPart?.Properties;
+            var copyCustomProps = copyDoc.CustomFilePropertiesPart?.Properties;
+
+            if (origCustomProps != null)
+            {
+                var origCustomPropCount = origCustomProps.Elements<DocumentFormat.OpenXml.CustomProperties.CustomDocumentProperty>().Count();
+                var copyCustomPropCount = copyCustomProps?.Elements<DocumentFormat.OpenXml.CustomProperties.CustomDocumentProperty>().Count() ?? 0;
+                Console.WriteLine($"  Custom property count: Original={origCustomPropCount}, Copy={copyCustomPropCount} {(origCustomPropCount == copyCustomPropCount ? "[OK]" : "[DIFF]")}");
+
+                foreach (var prop in origCustomProps.Elements<DocumentFormat.OpenXml.CustomProperties.CustomDocumentProperty>())
+                {
+                    var name = prop.Name?.Value ?? "(unnamed)";
+                    var value = prop.InnerText ?? "(null)";
+                    Console.WriteLine($"    {name}: \"{value}\"");
+                }
+            }
+            else
+            {
+                Console.WriteLine("  (No custom properties found in original)");
+            }
+        }
+
+        /// <summary>
+        /// Compares dynamic reference fields (DOCPROPERTY, etc.) between documents
+        /// </summary>
+        static void CompareDynamicReferences(
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument origDoc,
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument copyDoc)
+        {
+            var origBody = origDoc.MainDocumentPart?.Document?.Body;
+            var copyBody = copyDoc.MainDocumentPart?.Document?.Body;
+
+            if (origBody == null || copyBody == null)
+            {
+                Console.WriteLine("Could not access document bodies");
+                return;
+            }
+
+            // Find DOCPROPERTY field codes
+            var origDocPropFields = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Where(f => f.Text?.Contains("DOCPROPERTY") == true)
+                .Select(f => f.Text?.Trim())
+                .ToList();
+
+            var copyDocPropFields = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Where(f => f.Text?.Contains("DOCPROPERTY") == true)
+                .Select(f => f.Text?.Trim())
+                .ToList();
+
+            Console.WriteLine($"DOCPROPERTY fields: Original={origDocPropFields.Count}, Copy={copyDocPropFields.Count}");
+            foreach (var field in origDocPropFields)
+            {
+                var existsInCopy = copyDocPropFields.Contains(field);
+                Console.WriteLine($"  {field} {(existsInCopy ? "[OK]" : "[MISSING]")}");
+            }
+
+            // Find other dynamic field types
+            var allOrigFields = origBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Select(f => f.Text?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+
+            var allCopyFields = copyBody.Descendants<DocumentFormat.OpenXml.Wordprocessing.FieldCode>()
+                .Select(f => f.Text?.Trim())
+                .Where(t => !string.IsNullOrEmpty(t))
+                .ToList();
+
+            Console.WriteLine($"\nAll field codes: Original={allOrigFields.Count}, Copy={allCopyFields.Count}");
+            foreach (var field in allOrigFields.Distinct())
+            {
+                var origCount = allOrigFields.Count(f => f == field);
+                var copyCount = allCopyFields.Count(f => f == field);
+                var match = origCount == copyCount ? "[OK]" : "[DIFF]";
+                Console.WriteLine($"  \"{field}\": Original={origCount}, Copy={copyCount} {match}");
+            }
+        }
+
+        /// <summary>
+        /// Compares Glossary Document Part (building blocks) between documents
+        /// </summary>
+        static void CompareGlossaryDocument(
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument origDoc,
+            DocumentFormat.OpenXml.Packaging.WordprocessingDocument copyDoc)
+        {
+            var origGlossary = origDoc.MainDocumentPart?.GlossaryDocumentPart;
+            var copyGlossary = copyDoc.MainDocumentPart?.GlossaryDocumentPart;
+
+            var origHasGlossary = origGlossary?.GlossaryDocument != null;
+            var copyHasGlossary = copyGlossary?.GlossaryDocument != null;
+
+            Console.WriteLine($"Has Glossary Document: Original={origHasGlossary}, Copy={copyHasGlossary} {(origHasGlossary == copyHasGlossary ? "[OK]" : "[DIFF]")}");
+
+            if (origHasGlossary)
+            {
+                var origDocPartCount = origGlossary!.GlossaryDocument!.Descendants<DocumentFormat.OpenXml.Wordprocessing.DocPart>().Count();
+                var copyDocPartCount = copyGlossary?.GlossaryDocument?.Descendants<DocumentFormat.OpenXml.Wordprocessing.DocPart>().Count() ?? 0;
+                Console.WriteLine($"Building blocks (DocParts): Original={origDocPartCount}, Copy={copyDocPartCount} {(origDocPartCount == copyDocPartCount ? "[OK]" : "[DIFF]")}");
+
+                // List building block names
+                var docPartNames = origGlossary.GlossaryDocument
+                    .Descendants<DocumentFormat.OpenXml.Wordprocessing.DocPartName>()
+                    .Select(n => n.Val?.Value)
+                    .Where(n => !string.IsNullOrEmpty(n))
+                    .ToList();
+
+                if (docPartNames.Count > 0)
+                {
+                    Console.WriteLine("Building block names:");
+                    foreach (var name in docPartNames)
+                    {
+                        Console.WriteLine($"  - {name}");
+                    }
+                }
+            }
         }
 
         /// <summary>
