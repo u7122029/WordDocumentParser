@@ -19,11 +19,11 @@ namespace WordDocumentParser
         private NumberingDefinitionsPart? _numberingPart;
         private int _currentListId = 1;
         private uint _imageCounter = 1;
-        private readonly Dictionary<string, string> _hyperlinkRelationships = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> _imageRelationshipMapping = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> _hyperlinkRelationshipMapping = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> _headerRelationshipMapping = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> _footerRelationshipMapping = new Dictionary<string, string>();
+        private readonly Dictionary<string, string> _hyperlinkRelationships = [];
+        private readonly Dictionary<string, string> _imageRelationshipMapping = [];
+        private readonly Dictionary<string, string> _hyperlinkRelationshipMapping = [];
+        private readonly Dictionary<string, string> _headerRelationshipMapping = [];
+        private readonly Dictionary<string, string> _footerRelationshipMapping = [];
         private DocumentPackageData? _packageData;
 
         /// <summary>

@@ -17,7 +17,7 @@ A .NET library for parsing Word documents (.docx) into a hierarchical tree struc
 ### Requirements
 
 - .NET 9.0 or later
-- DocumentFormat.OpenXml 3.0.2
+- DocumentFormat.OpenXml 3.4.1
 
 ### Add to your project
 
@@ -36,7 +36,7 @@ Or if using the compiled library:
     <Reference Include="WordDocumentParser">
         <HintPath>path\to\WordDocumentParser.dll</HintPath>
     </Reference>
-    <PackageReference Include="DocumentFormat.OpenXml" Version="3.0.2" />
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.4.1" />
 </ItemGroup>
 ```
 
