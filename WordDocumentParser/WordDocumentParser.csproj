@@ -1,14 +1,17 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <OutputType>Exe</OutputType>
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <RootNamespace>WordDocumentParser</RootNamespace>
         <AssemblyName>WordDocumentParser</AssemblyName>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <Description>A library for parsing Word documents (.docx) into a hierarchical tree structure and writing them back to docx format with full formatting preservation.</Description>
+        <Authors>WordDocumentParser Contributors</Authors>
+        <PackageTags>word;docx;openxml;parser;document</PackageTags>
     </PropertyGroup>
-    
+
     <ItemGroup>
         <!-- Open XML SDK for reading/writing Word documents -->
         <PackageReference Include="DocumentFormat.OpenXml" Version="3.0.2" />
