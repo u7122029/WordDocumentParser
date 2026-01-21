@@ -294,6 +294,51 @@ namespace WordDocumentParser
                 }
             }
 
+            // Extract Glossary Document Part (for Quick Parts, building blocks, document property fields)
+            if (_mainPart?.GlossaryDocumentPart != null)
+            {
+                var glossaryPart = _mainPart.GlossaryDocumentPart;
+                if (glossaryPart.GlossaryDocument != null)
+                {
+                    packageData.GlossaryDocumentXml = glossaryPart.GlossaryDocument.OuterXml;
+                }
+
+                // Extract glossary styles
+                if (glossaryPart.StyleDefinitionsPart?.Styles != null)
+                {
+                    packageData.GlossaryStylesXml = glossaryPart.StyleDefinitionsPart.Styles.OuterXml;
+                }
+
+                // Extract glossary font table
+                if (glossaryPart.FontTablePart?.Fonts != null)
+                {
+                    packageData.GlossaryFontTableXml = glossaryPart.FontTablePart.Fonts.OuterXml;
+                }
+
+                // Extract glossary images
+                foreach (var imagePart in glossaryPart.ImageParts ?? Enumerable.Empty<ImagePart>())
+                {
+                    var relId = glossaryPart.GetIdOfPart(imagePart);
+                    try
+                    {
+                        using var imgStream = imagePart.GetStream();
+                        using var ms = new MemoryStream();
+                        imgStream.CopyTo(ms);
+                        packageData.GlossaryImages[relId] = new ImagePartData
+                        {
+                            ContentType = imagePart.ContentType,
+                            Data = ms.ToArray(),
+                            OriginalRelationshipId = relId,
+                            OriginalUri = imagePart.Uri?.ToString()
+                        };
+                    }
+                    catch
+                    {
+                        // Skip images that can't be read
+                    }
+                }
+            }
+
             return packageData;
         }
 
@@ -1153,21 +1198,48 @@ namespace WordDocumentParser
             var content = sdtBlock.SdtContentBlock;
             if (content == null) return null;
 
+            // Get all child elements (paragraphs and tables)
+            var childElements = content.ChildElements.ToList();
+
+            // If there's only one paragraph, process it normally but preserve SDT context
             var paragraphs = content.Elements<Paragraph>().ToList();
-            if (paragraphs.Count == 1)
-            {
-                return ProcessParagraph(paragraphs[0]);
-            }
+            var tables = content.Elements<Table>().ToList();
 
-            var node = new DocumentNode(ContentType.Paragraph, "");
-            foreach (var para in paragraphs)
+            if (paragraphs.Count == 1 && tables.Count == 0)
             {
-                var paraNode = ProcessParagraph(para);
+                var paraNode = ProcessParagraph(paragraphs[0]);
                 if (paraNode != null)
-                    node.AddChild(paraNode);
+                {
+                    // Store the entire SDT block XML to preserve structure for complex content
+                    paraNode.OriginalXml = sdtBlock.OuterXml;
+                    paraNode.Metadata["IsSdtContent"] = true;
+                }
+                return paraNode;
             }
 
-            return node.Children.Count > 0 ? node : null;
+            // For SDT blocks with multiple elements, create a container node and store original XML
+            var containerNode = new DocumentNode(ContentType.Paragraph, "");
+            containerNode.OriginalXml = sdtBlock.OuterXml;
+            containerNode.Metadata["IsSdtBlock"] = true;
+
+            // Process each child element
+            foreach (var element in childElements)
+            {
+                DocumentNode? childNode = element switch
+                {
+                    Paragraph para => ProcessParagraph(para),
+                    Table table => ProcessTable(table),
+                    _ => null
+                };
+
+                if (childNode != null)
+                {
+                    containerNode.AddChild(childNode);
+                }
+            }
+
+            // Return the container if it has children, otherwise null
+            return containerNode.Children.Count > 0 ? containerNode : null;
         }
 
         public void Dispose()

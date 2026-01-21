@@ -135,7 +135,7 @@ namespace WordDocumentParser
             var prefix = new string(' ', indent * 2);
             var typeLabel = Type == ContentType.Heading ? $"H{HeadingLevel}" : Type.ToString();
             var textPreview = Text.Length > 50 ? Text.Substring(0, 47) + "..." : Text;
-            var result = $"{prefix}[{typeLabel}] {textPreview}\n";
+            var result = $"{prefix}[{typeLabel}][{ParagraphFormatting?.StyleId}] {textPreview}\n";
 
             foreach (var child in Children)
             {

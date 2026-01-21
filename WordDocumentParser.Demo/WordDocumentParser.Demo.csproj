@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>WordDocumentParser.Demo</RootNamespace>
+        <AssemblyName>WordDocumentParser.Demo</AssemblyName>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\WordDocumentParser\WordDocumentParser.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- For document validation in demos -->
+        <PackageReference Include="DocumentFormat.OpenXml" Version="3.0.2" />
+    </ItemGroup>
+
+</Project>

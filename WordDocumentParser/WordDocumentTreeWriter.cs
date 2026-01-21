@@ -264,6 +264,76 @@ namespace WordDocumentParser
                     // Skip custom XML parts that fail to restore
                 }
             }
+
+            // Restore Glossary Document Part (for Quick Parts, building blocks, document property fields)
+            RestoreGlossaryDocumentPart();
+        }
+
+        /// <summary>
+        /// Restores the Glossary Document Part (building blocks, Quick Parts)
+        /// </summary>
+        private void RestoreGlossaryDocumentPart()
+        {
+            if (string.IsNullOrEmpty(_packageData?.GlossaryDocumentXml))
+                return;
+
+            try
+            {
+                var glossaryPart = _mainPart!.AddNewPart<GlossaryDocumentPart>();
+                var cleanedGlossaryXml = CleanXmlAttributes(_packageData.GlossaryDocumentXml);
+                glossaryPart.GlossaryDocument = new GlossaryDocument(cleanedGlossaryXml);
+                FixIndentationAttributes(glossaryPart.GlossaryDocument);
+
+                // Restore glossary styles
+                if (!string.IsNullOrEmpty(_packageData.GlossaryStylesXml))
+                {
+                    var glossaryStylesPart = glossaryPart.AddNewPart<StyleDefinitionsPart>();
+                    var cleanedStylesXml = CleanXmlAttributes(_packageData.GlossaryStylesXml);
+                    glossaryStylesPart.Styles = new Styles(cleanedStylesXml);
+                    FixIndentationAttributes(glossaryStylesPart.Styles);
+                }
+
+                // Restore glossary font table
+                if (!string.IsNullOrEmpty(_packageData.GlossaryFontTableXml))
+                {
+                    var glossaryFontPart = glossaryPart.AddNewPart<FontTablePart>();
+                    var cleanedFontXml = CleanXmlAttributes(_packageData.GlossaryFontTableXml);
+                    glossaryFontPart.Fonts = new Fonts(cleanedFontXml);
+                }
+
+                // Restore glossary images
+                var glossaryImageMapping = new Dictionary<string, string>();
+                foreach (var kvp in _packageData.GlossaryImages)
+                {
+                    var originalRelId = kvp.Key;
+                    var imageData = kvp.Value;
+
+                    var imagePart = glossaryPart.AddImagePart(imageData.ContentType);
+                    using (var stream = new MemoryStream(imageData.Data))
+                    {
+                        imagePart.FeedData(stream);
+                    }
+
+                    var newRelId = glossaryPart.GetIdOfPart(imagePart);
+                    glossaryImageMapping[originalRelId] = newRelId;
+                }
+
+                // Update image references in glossary document
+                if (glossaryImageMapping.Count > 0 && glossaryPart.GlossaryDocument != null)
+                {
+                    var xml = glossaryPart.GlossaryDocument.OuterXml;
+                    foreach (var kvp in glossaryImageMapping)
+                    {
+                        xml = xml.Replace($"r:embed=\"{kvp.Key}\"", $"r:embed=\"{kvp.Value}\"");
+                        xml = xml.Replace($"r:id=\"{kvp.Key}\"", $"r:id=\"{kvp.Value}\"");
+                    }
+                    glossaryPart.GlossaryDocument = new GlossaryDocument(xml);
+                }
+            }
+            catch
+            {
+                // Skip glossary document restoration if it fails
+            }
         }
 
         /// <summary>
@@ -276,12 +346,18 @@ namespace WordDocumentParser
             // Remove ALL w14: prefixed attributes (Word 2010 tracking attributes)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w14:[a-zA-Z0-9]+=""[^""]*""", "");
 
-            // Remove w14: prefixed elements (self-closing and opening/closing pairs)
+            // Remove w14: prefixed elements (self-closing first, then nested)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*>.*?</w14:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w14:");
 
             // Remove wp14: prefixed attributes (Word 2010 drawing extensions)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+wp14:[a-zA-Z0-9]+=""[^""]*""", "");
+
+            // Remove wp14: prefixed elements (Word 2010 drawing extensions)
+            // Handle self-closing elements first
+            result = System.Text.RegularExpressions.Regex.Replace(result, @"<wp14:[^>]*/\s*>", "");
+            // Handle wp14 elements with nested content - need to handle nested wp14 elements properly
+            result = RemoveXmlElements(result, "wp14:");
 
             // Remove w15/w16 prefixed attributes (Word 2013/2016 extensions)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w15:[a-zA-Z0-9]+=""[^""]*""", "");
@@ -289,11 +365,15 @@ namespace WordDocumentParser
 
             // Remove w15: prefixed elements
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*>.*?</w15:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w15:");
 
             // Remove w16 prefixed elements (w16, w16se, w16cid, etc.)
             result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*/\s*>", "");
-            result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*>.*?</w16[a-z]*:[^>]*>", "", System.Text.RegularExpressions.RegexOptions.Singleline);
+            result = RemoveXmlElements(result, "w16se:");
+            result = RemoveXmlElements(result, "w16cid:");
+            result = RemoveXmlElements(result, "w16cex:");
+            result = RemoveXmlElements(result, "w16sdtdh:");
+            result = RemoveXmlElements(result, "w16:");
 
             // Remove namespace declarations for removed prefixes
             result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w14=""[^""]*""", "");
@@ -317,6 +397,63 @@ namespace WordDocumentParser
             // This is safer than trying to remove entire AlternateContent blocks
             result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wps""", @"Requires=""""");
             result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wpc""", @"Requires=""""");
+
+            return result;
+        }
+
+        /// <summary>
+        /// Removes XML elements with the specified prefix, handling nested elements properly
+        /// </summary>
+        private static string RemoveXmlElements(string xml, string prefix)
+        {
+            var result = xml;
+            bool changed;
+
+            // Escape the prefix for regex (in case it contains special characters)
+            var escapedPrefix = System.Text.RegularExpressions.Regex.Escape(prefix);
+
+            // Keep iterating until no more elements with the prefix are found
+            // This handles nested elements by removing innermost first
+            do
+            {
+                changed = false;
+                var openTagPattern = $@"<{escapedPrefix}([a-zA-Z0-9]+)(\s[^>]*)?>"; // Match opening tag
+                var regex = new System.Text.RegularExpressions.Regex(openTagPattern);
+                var match = regex.Match(result);
+
+                while (match.Success)
+                {
+                    var tagName = match.Groups[1].Value;
+                    var startIndex = match.Index;
+                    var closeTag = $"</{prefix}{tagName}>";
+                    var closeIndex = result.IndexOf(closeTag, startIndex + match.Length, StringComparison.Ordinal);
+
+                    if (closeIndex > 0)
+                    {
+                        // Check if there's a nested element with the same prefix between open and close
+                        var contentBetween = result.Substring(startIndex + match.Length, closeIndex - startIndex - match.Length);
+                        var nestedMatch = System.Text.RegularExpressions.Regex.Match(contentBetween, $@"<{escapedPrefix}");
+
+                        if (nestedMatch.Success)
+                        {
+                            // There's a nested element, skip this match and try the next one
+                            match = match.NextMatch();
+                            continue;
+                        }
+
+                        // Remove the entire element (from opening tag to closing tag inclusive)
+                        var lengthToRemove = closeIndex + closeTag.Length - startIndex;
+                        result = result.Remove(startIndex, lengthToRemove);
+                        changed = true;
+                        break; // Start over to handle any remaining elements
+                    }
+                    else
+                    {
+                        // No closing tag found, try next match
+                        match = match.NextMatch();
+                    }
+                }
+            } while (changed);
 
             return result;
         }
@@ -384,30 +521,145 @@ namespace WordDocumentParser
         /// </summary>
         private void RestoreDocumentProperties()
         {
-            // Restore only essential core properties
-            // Extended properties (Pages, Words, etc.) will be regenerated by Word
-            // Custom properties are skipped to avoid format issues
+            // Restore core properties
             if (_packageData?.CoreProperties != null)
             {
                 var props = _document!.PackageProperties;
                 var core = _packageData.CoreProperties;
 
-                // Only restore text-based properties that don't cause validation issues
-                if (!string.IsNullOrEmpty(core.Title)) props.Title = core.Title;
-                if (!string.IsNullOrEmpty(core.Subject)) props.Subject = core.Subject;
-                if (!string.IsNullOrEmpty(core.Creator)) props.Creator = core.Creator;
-                if (!string.IsNullOrEmpty(core.Keywords)) props.Keywords = core.Keywords;
-                if (!string.IsNullOrEmpty(core.Description)) props.Description = core.Description;
-                if (!string.IsNullOrEmpty(core.Category)) props.Category = core.Category;
+                // Restore all text-based core properties (including empty strings for round-trip fidelity)
+                if (core.Title != null) props.Title = core.Title;
+                if (core.Subject != null) props.Subject = core.Subject;
+                if (core.Creator != null) props.Creator = core.Creator;
+                if (core.Keywords != null) props.Keywords = core.Keywords;
+                if (core.Description != null) props.Description = core.Description;
+                if (core.Category != null) props.Category = core.Category;
+                if (core.LastModifiedBy != null) props.LastModifiedBy = core.LastModifiedBy;
+                if (core.Revision != null) props.Revision = core.Revision;
+                if (core.ContentStatus != null) props.ContentStatus = core.ContentStatus;
 
-                // Note: We intentionally skip LastModifiedBy, Revision, ContentStatus, Created, Modified
-                // as these can cause "Summary Info" repair warnings in some cases
+                // Restore date properties
+                if (!string.IsNullOrEmpty(core.Created) && DateTime.TryParse(core.Created, out var created))
+                    props.Created = created;
+                if (!string.IsNullOrEmpty(core.Modified) && DateTime.TryParse(core.Modified, out var modified))
+                    props.Modified = modified;
             }
 
-            // Skip extended properties - Word will regenerate them automatically
-            // This avoids element ordering issues that cause "Summary Info" repair warnings
+            // Restore extended properties (Company, Template, Application, etc.)
+            RestoreExtendedProperties();
 
-            // Skip custom properties - they can contain format-specific issues
+            // Restore custom properties
+            RestoreCustomProperties();
+        }
+
+        /// <summary>
+        /// Restores extended document properties
+        /// </summary>
+        private void RestoreExtendedProperties()
+        {
+            if (_packageData?.ExtendedProperties == null)
+                return;
+
+            try
+            {
+                var extProps = _packageData.ExtendedProperties;
+
+                // Get or create the extended properties part
+                var extPropsPart = _document!.ExtendedFilePropertiesPart;
+                if (extPropsPart == null)
+                {
+                    extPropsPart = _document.AddExtendedFilePropertiesPart();
+                    extPropsPart.Properties = new DocumentFormat.OpenXml.ExtendedProperties.Properties();
+                }
+
+                var properties = extPropsPart.Properties;
+
+                // Restore text properties (including empty strings for round-trip fidelity)
+                if (extProps.Template != null)
+                {
+                    properties.Template = new DocumentFormat.OpenXml.ExtendedProperties.Template(extProps.Template);
+                }
+                if (extProps.Company != null)
+                {
+                    properties.Company = new DocumentFormat.OpenXml.ExtendedProperties.Company(extProps.Company);
+                }
+                if (extProps.Manager != null)
+                {
+                    properties.Manager = new DocumentFormat.OpenXml.ExtendedProperties.Manager(extProps.Manager);
+                }
+                if (extProps.Application != null)
+                {
+                    properties.Application = new DocumentFormat.OpenXml.ExtendedProperties.Application(extProps.Application);
+                }
+                if (extProps.AppVersion != null)
+                {
+                    properties.ApplicationVersion = new DocumentFormat.OpenXml.ExtendedProperties.ApplicationVersion(extProps.AppVersion);
+                }
+
+                // Restore numeric properties (these will be regenerated by Word on save, but include for completeness)
+                if (extProps.Pages.HasValue)
+                {
+                    properties.Pages = new DocumentFormat.OpenXml.ExtendedProperties.Pages(extProps.Pages.Value.ToString());
+                }
+                if (extProps.Words.HasValue)
+                {
+                    properties.Words = new DocumentFormat.OpenXml.ExtendedProperties.Words(extProps.Words.Value.ToString());
+                }
+                if (extProps.Characters.HasValue)
+                {
+                    properties.Characters = new DocumentFormat.OpenXml.ExtendedProperties.Characters(extProps.Characters.Value.ToString());
+                }
+                if (extProps.CharactersWithSpaces.HasValue)
+                {
+                    properties.CharactersWithSpaces = new DocumentFormat.OpenXml.ExtendedProperties.CharactersWithSpaces(extProps.CharactersWithSpaces.Value.ToString());
+                }
+                if (extProps.Lines.HasValue)
+                {
+                    properties.Lines = new DocumentFormat.OpenXml.ExtendedProperties.Lines(extProps.Lines.Value.ToString());
+                }
+                if (extProps.Paragraphs.HasValue)
+                {
+                    properties.Paragraphs = new DocumentFormat.OpenXml.ExtendedProperties.Paragraphs(extProps.Paragraphs.Value.ToString());
+                }
+                if (extProps.TotalTime.HasValue)
+                {
+                    properties.TotalTime = new DocumentFormat.OpenXml.ExtendedProperties.TotalTime(extProps.TotalTime.Value.ToString());
+                }
+
+                properties.Save();
+            }
+            catch
+            {
+                // Skip extended properties if restoration fails
+            }
+        }
+
+        /// <summary>
+        /// Restores custom document properties
+        /// </summary>
+        private void RestoreCustomProperties()
+        {
+            if (string.IsNullOrEmpty(_packageData?.CustomPropertiesXml))
+                return;
+
+            try
+            {
+                // Get or create the custom properties part
+                var customPropsPart = _document!.CustomFilePropertiesPart;
+                if (customPropsPart == null)
+                {
+                    customPropsPart = _document.AddCustomFilePropertiesPart();
+                }
+
+                // Parse and restore the custom properties XML
+                var cleanedXml = CleanXmlAttributes(_packageData.CustomPropertiesXml);
+                customPropsPart.Properties = new DocumentFormat.OpenXml.CustomProperties.Properties(cleanedXml);
+                customPropsPart.Properties.Save();
+            }
+            catch
+            {
+                // Skip custom properties if restoration fails
+            }
         }
 
         /// <summary>
@@ -551,13 +803,31 @@ namespace WordDocumentParser
         /// </summary>
         private void WriteHeading(DocumentNode node)
         {
+            // Check if this is an SDT block that should be preserved
+            if (node.Metadata.TryGetValue("IsSdtBlock", out var isSdtBlock) && (bool)isSdtBlock)
+            {
+                WriteSdtBlock(node);
+                return;
+            }
+
             // Use original XML if available for exact round-trip
             if (!string.IsNullOrEmpty(node.OriginalXml))
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
-                var paragraph = new Paragraph(updatedXml);
-                FixIndentationAttributes(paragraph);
-                _body!.Append(paragraph);
+
+                // Check if the original XML is an SDT block
+                if (updatedXml.TrimStart().StartsWith("<w:sdt"))
+                {
+                    var sdtBlock = new SdtBlock(updatedXml);
+                    FixIndentationAttributes(sdtBlock);
+                    _body!.Append(sdtBlock);
+                }
+                else
+                {
+                    var paragraph = new Paragraph(updatedXml);
+                    FixIndentationAttributes(paragraph);
+                    _body!.Append(paragraph);
+                }
             }
             else
             {
@@ -587,9 +857,17 @@ namespace WordDocumentParser
             }
 
             // Process children (content under this heading)
-            foreach (var child in node.Children)
+            // Skip if we used original XML and it was an SDT block (content already included)
+            bool skipChildren = !string.IsNullOrEmpty(node.OriginalXml) &&
+                               (node.OriginalXml.TrimStart().StartsWith("<w:sdt") ||
+                                node.Metadata.ContainsKey("IsSdtBlock"));
+
+            if (!skipChildren)
             {
-                ProcessNode(child);
+                foreach (var child in node.Children)
+                {
+                    ProcessNode(child);
+                }
             }
         }
 
@@ -598,13 +876,31 @@ namespace WordDocumentParser
         /// </summary>
         private void WriteParagraph(DocumentNode node)
         {
+            // Check if this is an SDT block that should be preserved
+            if (node.Metadata.TryGetValue("IsSdtBlock", out var isSdtBlock) && (bool)isSdtBlock)
+            {
+                WriteSdtBlock(node);
+                return;
+            }
+
             // Use original XML if available for exact round-trip
             if (!string.IsNullOrEmpty(node.OriginalXml))
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
-                var paragraph = new Paragraph(updatedXml);
-                FixIndentationAttributes(paragraph);
-                _body!.Append(paragraph);
+
+                // Check if the original XML is an SDT block
+                if (updatedXml.TrimStart().StartsWith("<w:sdt"))
+                {
+                    var sdtBlock = new SdtBlock(updatedXml);
+                    FixIndentationAttributes(sdtBlock);
+                    _body!.Append(sdtBlock);
+                }
+                else
+                {
+                    var paragraph = new Paragraph(updatedXml);
+                    FixIndentationAttributes(paragraph);
+                    _body!.Append(paragraph);
+                }
             }
             else
             {
@@ -642,10 +938,35 @@ namespace WordDocumentParser
                 }
             }
 
-            // Process other children
-            foreach (var child in node.Children)
+            // Process other children (skip if this was an SDT block)
+            if (!node.Metadata.ContainsKey("IsSdtBlock") || !(bool)node.Metadata["IsSdtBlock"])
             {
-                if (child.Type != ContentType.Image)
+                foreach (var child in node.Children)
+                {
+                    if (child.Type != ContentType.Image)
+                    {
+                        ProcessNode(child);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes an SDT block (Structured Document Tag) with preserved original XML
+        /// </summary>
+        private void WriteSdtBlock(DocumentNode node)
+        {
+            if (!string.IsNullOrEmpty(node.OriginalXml))
+            {
+                var updatedXml = UpdateImageRelationships(node.OriginalXml);
+                var sdtBlock = new SdtBlock(updatedXml);
+                FixIndentationAttributes(sdtBlock);
+                _body!.Append(sdtBlock);
+            }
+            else
+            {
+                // Fallback: write children as regular content if original XML not available
+                foreach (var child in node.Children)
                 {
                     ProcessNode(child);
                 }
