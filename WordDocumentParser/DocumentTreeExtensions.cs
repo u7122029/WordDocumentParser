@@ -1,3 +1,5 @@
+using WordDocumentParser.FormattingModels;
+
 namespace WordDocumentParser;
 
 /// <summary>
@@ -206,6 +208,173 @@ public static class DocumentTreeExtensions
     }
 
     /// <summary>
+    /// Gets all content controls in the document (both block-level and inline)
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetAllContentControls(this DocumentNode root)
+        => root.FindAll(n => n.IsContentControl || n.HasInlineContentControls());
+
+    /// <summary>
+    /// Gets all content controls of a specific type (both block-level and inline)
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetContentControlsByType(this DocumentNode root, ContentControlType type)
+        => root.FindAll(n => n.ContentControlProperties?.Type == type ||
+                             n.Runs.Any(r => r.ContentControlProperties?.Type == type));
+
+    /// <summary>
+    /// Checks if a node has inline content controls in its runs
+    /// </summary>
+    public static bool HasInlineContentControls(this DocumentNode node)
+        => node.Runs.Any(r => r.IsContentControlRun);
+
+    /// <summary>
+    /// Gets all inline content control properties from a node's runs
+    /// </summary>
+    public static IEnumerable<ContentControlProperties> GetInlineContentControlProperties(this DocumentNode node)
+        => node.Runs
+            .Where(r => r.IsContentControlRun && r.ContentControlProperties is not null)
+            .Select(r => r.ContentControlProperties!)
+            .Distinct();
+
+    /// <summary>
+    /// Finds a content control by its tag (checks both block-level and inline controls)
+    /// </summary>
+    public static DocumentNode? FindContentControlByTag(this DocumentNode root, string tag)
+        => root.FindFirst(n =>
+            n.ContentControlProperties?.Tag == tag ||
+            n.Runs.Any(r => r.ContentControlProperties?.Tag == tag));
+
+    /// <summary>
+    /// Finds a content control by its alias/title (checks both block-level and inline controls)
+    /// </summary>
+    public static DocumentNode? FindContentControlByAlias(this DocumentNode root, string alias)
+        => root.FindFirst(n =>
+            n.ContentControlProperties?.Alias == alias ||
+            n.Runs.Any(r => r.ContentControlProperties?.Alias == alias));
+
+    /// <summary>
+    /// Finds a content control by its ID (checks both block-level and inline controls)
+    /// </summary>
+    public static DocumentNode? FindContentControlById(this DocumentNode root, int id)
+        => root.FindFirst(n =>
+            n.ContentControlProperties?.Id == id ||
+            n.Runs.Any(r => r.ContentControlProperties?.Id == id));
+
+    /// <summary>
+    /// Gets all document property content controls
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetDocumentPropertyControls(this DocumentNode root)
+        => root.GetContentControlsByType(ContentControlType.DocumentProperty);
+
+    /// <summary>
+    /// Gets all nodes that contain document property fields
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetNodesWithDocumentPropertyFields(this DocumentNode root)
+        => root.FindAll(n => n.HasDocumentPropertyFields);
+
+    /// <summary>
+    /// Gets all document property fields in the document
+    /// </summary>
+    public static IEnumerable<DocumentPropertyField> GetAllDocumentPropertyFields(this DocumentNode root)
+    {
+        foreach (var node in root.FindAll(_ => true))
+        {
+            foreach (var run in node.Runs)
+            {
+                if (run.DocumentPropertyField is not null)
+                {
+                    yield return run.DocumentPropertyField;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gets all text from the document with metadata annotations for document properties and content controls
+    /// </summary>
+    public static string GetAllTextWithMetadata(this DocumentNode node)
+    {
+        var texts = new List<string>();
+
+        if (node.Type is not ContentType.Table and not ContentType.Image)
+        {
+            var text = node.GetTextWithMetadata();
+            if (!string.IsNullOrEmpty(text))
+            {
+                texts.Add(text);
+            }
+        }
+
+        foreach (var child in node.Children)
+        {
+            texts.Add(child.GetAllTextWithMetadata());
+        }
+
+        return string.Join("\n", texts.Where(t => !string.IsNullOrWhiteSpace(t)));
+    }
+
+    /// <summary>
+    /// Sets the value of a content control by tag
+    /// </summary>
+    public static bool SetContentControlValueByTag(this DocumentNode root, string tag, string newValue)
+    {
+        var control = root.FindContentControlByTag(tag);
+        if (control is null) return false;
+
+        control.Text = newValue;
+        if (control.ContentControlProperties is not null)
+        {
+            control.ContentControlProperties.Value = newValue;
+        }
+
+        // Update runs if present
+        if (control.Runs.Count > 0)
+        {
+            control.Runs.Clear();
+            control.Runs.Add(new FormattedRun(newValue));
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Sets the value of a content control by alias
+    /// </summary>
+    public static bool SetContentControlValueByAlias(this DocumentNode root, string alias, string newValue)
+    {
+        var control = root.FindContentControlByAlias(alias);
+        if (control is null) return false;
+
+        control.Text = newValue;
+        if (control.ContentControlProperties is not null)
+        {
+            control.ContentControlProperties.Value = newValue;
+        }
+
+        // Update runs if present
+        if (control.Runs.Count > 0)
+        {
+            control.Runs.Clear();
+            control.Runs.Add(new FormattedRun(newValue));
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Gets all content control tags in the document
+    /// </summary>
+    public static IEnumerable<string> GetContentControlTags(this DocumentNode root)
+        => root.GetAllContentControls()
+            .Where(n => !string.IsNullOrEmpty(n.ContentControlProperties?.Tag))
+            .Select(n => n.ContentControlProperties!.Tag!);
+
+    /// <summary>
+    /// Gets content control properties by tag
+    /// </summary>
+    public static ContentControlProperties? GetContentControlPropertiesByTag(this DocumentNode root, string tag)
+        => root.FindContentControlByTag(tag)?.ContentControlProperties;
+
+    /// <summary>
     /// Saves the document tree to a Word document file (.docx)
     /// </summary>
     /// <param name="root">The root document node</param>
@@ -237,5 +406,158 @@ public static class DocumentTreeExtensions
         using var stream = new MemoryStream();
         root.SaveToStream(stream);
         return stream.ToArray();
+    }
+
+    /// <summary>
+    /// Removes a content control from a node, keeping the text content but removing the control wrapper.
+    /// For block-level content controls, this clears the ContentControlProperties and OriginalXml.
+    /// For inline content controls, this removes the ContentControlProperties from the affected runs.
+    /// </summary>
+    /// <param name="node">The node containing the content control</param>
+    /// <param name="contentControlId">The ID of the content control to remove. If null, removes all content controls from the node.</param>
+    /// <returns>True if any content control was removed, false otherwise</returns>
+    public static bool RemoveContentControl(this DocumentNode node, int? contentControlId = null)
+    {
+        var removed = false;
+
+        // Handle block-level content control
+        if (node.ContentControlProperties is not null)
+        {
+            if (contentControlId is null || node.ContentControlProperties.Id == contentControlId)
+            {
+                node.ContentControlProperties = null;
+                node.OriginalXml = null; // Force rebuild without SDT wrapper
+                node.Metadata.Remove("IsSdtContent");
+                node.Metadata.Remove("IsSdtBlock");
+                removed = true;
+            }
+        }
+
+        // Handle inline content controls in runs
+        foreach (var run in node.Runs)
+        {
+            if (run.ContentControlProperties is not null)
+            {
+                if (contentControlId is null || run.ContentControlProperties.Id == contentControlId)
+                {
+                    run.ContentControlProperties = null;
+                    removed = true;
+                }
+            }
+        }
+
+        // If we removed any inline content controls, we need to clear OriginalXml to force rebuild
+        if (removed && node.Runs.Any())
+        {
+            node.OriginalXml = null;
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// Removes all content controls from a document, keeping the text content.
+    /// </summary>
+    /// <param name="root">The root document node</param>
+    /// <returns>The number of content controls removed</returns>
+    public static int RemoveAllContentControls(this DocumentNode root)
+    {
+        var count = 0;
+        foreach (var node in root.FindAll(_ => true))
+        {
+            if (node.RemoveContentControl())
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Removes a document property field from a node's runs, keeping the text content.
+    /// </summary>
+    /// <param name="node">The node containing the document property field</param>
+    /// <param name="propertyName">The name of the property to remove. If null, removes all document property fields.</param>
+    /// <returns>True if any document property field was removed, false otherwise</returns>
+    public static bool RemoveDocumentPropertyField(this DocumentNode node, string? propertyName = null)
+    {
+        var removed = false;
+
+        foreach (var run in node.Runs)
+        {
+            if (run.DocumentPropertyField is not null)
+            {
+                if (propertyName is null ||
+                    string.Equals(run.DocumentPropertyField.PropertyName, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    run.DocumentPropertyField = null;
+                    removed = true;
+                }
+            }
+        }
+
+        // If we removed any fields, clear OriginalXml to force rebuild
+        if (removed)
+        {
+            node.OriginalXml = null;
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// Removes all document property fields from a document, keeping the text content.
+    /// </summary>
+    /// <param name="root">The root document node</param>
+    /// <returns>The number of nodes that had document property fields removed</returns>
+    public static int RemoveAllDocumentPropertyFields(this DocumentNode root)
+    {
+        var count = 0;
+        foreach (var node in root.FindAll(_ => true))
+        {
+            if (node.RemoveDocumentPropertyField())
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Removes a content control by its tag, keeping the text content.
+    /// </summary>
+    /// <param name="root">The root document node</param>
+    /// <param name="tag">The tag of the content control to remove</param>
+    /// <returns>True if the content control was found and removed, false otherwise</returns>
+    public static bool RemoveContentControlByTag(this DocumentNode root, string tag)
+    {
+        var node = root.FindContentControlByTag(tag);
+        if (node is null) return false;
+
+        // Check block-level first, then inline controls
+        var ccId = node.ContentControlProperties?.Tag == tag
+            ? node.ContentControlProperties?.Id
+            : node.Runs.FirstOrDefault(r => r.ContentControlProperties?.Tag == tag)?.ContentControlProperties?.Id;
+
+        return node.RemoveContentControl(ccId);
+    }
+
+    /// <summary>
+    /// Removes a content control by its alias, keeping the text content.
+    /// </summary>
+    /// <param name="root">The root document node</param>
+    /// <param name="alias">The alias of the content control to remove</param>
+    /// <returns>True if the content control was found and removed, false otherwise</returns>
+    public static bool RemoveContentControlByAlias(this DocumentNode root, string alias)
+    {
+        var node = root.FindContentControlByAlias(alias);
+        if (node is null) return false;
+
+        // Check block-level first, then inline controls
+        var ccId = node.ContentControlProperties?.Alias == alias
+            ? node.ContentControlProperties?.Id
+            : node.Runs.FirstOrDefault(r => r.ContentControlProperties?.Alias == alias)?.ContentControlProperties?.Id;
+
+        return node.RemoveContentControl(ccId);
     }
 }

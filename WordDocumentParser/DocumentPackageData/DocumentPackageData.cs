@@ -1,4 +1,4 @@
-namespace WordDocumentParser;
+namespace WordDocumentParser.DocumentPackageData;
 
 /// <summary>
 /// Stores the original document package data for round-trip fidelity.
@@ -125,70 +125,4 @@ public class DocumentPackageData
     /// Images from glossary document part - key is relationship ID, value is image data
     /// </summary>
     public Dictionary<string, ImagePartData> GlossaryImages { get; set; } = [];
-}
-
-/// <summary>
-/// Stores hyperlink relationship data
-/// </summary>
-public class HyperlinkRelationshipData
-{
-    public string Url { get; set; } = string.Empty;
-    public bool IsExternal { get; set; } = true;
-}
-
-/// <summary>
-/// Stores custom XML part data
-/// </summary>
-public class CustomXmlPartData
-{
-    public string XmlContent { get; set; } = string.Empty;
-    public string? PropertiesXml { get; set; }
-}
-
-/// <summary>
-/// Core document properties
-/// </summary>
-public class CoreProperties
-{
-    public string? Title { get; set; }
-    public string? Subject { get; set; }
-    public string? Creator { get; set; }
-    public string? Keywords { get; set; }
-    public string? Description { get; set; }
-    public string? LastModifiedBy { get; set; }
-    public string? Revision { get; set; }
-    public string? Created { get; set; }
-    public string? Modified { get; set; }
-    public string? Category { get; set; }
-    public string? ContentStatus { get; set; }
-}
-
-/// <summary>
-/// Extended document properties
-/// </summary>
-public class ExtendedProperties
-{
-    public string? Template { get; set; }
-    public string? Application { get; set; }
-    public string? AppVersion { get; set; }
-    public string? Company { get; set; }
-    public int? Pages { get; set; }
-    public int? Words { get; set; }
-    public int? Characters { get; set; }
-    public int? CharactersWithSpaces { get; set; }
-    public int? Lines { get; set; }
-    public int? Paragraphs { get; set; }
-    public string? Manager { get; set; }
-    public int? TotalTime { get; set; }
-}
-
-/// <summary>
-/// Stores image part data
-/// </summary>
-public class ImagePartData
-{
-    public string ContentType { get; set; } = string.Empty;
-    public byte[] Data { get; set; } = [];
-    public string OriginalRelationshipId { get; set; } = string.Empty;
-    public string? OriginalUri { get; set; }
 }

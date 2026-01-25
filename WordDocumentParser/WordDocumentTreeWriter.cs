@@ -1,6 +1,7 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using WordDocumentParser.FormattingModels;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using PIC = DocumentFormat.OpenXml.Drawing.Pictures;
@@ -24,7 +25,7 @@ namespace WordDocumentParser
         private readonly Dictionary<string, string> _hyperlinkRelationshipMapping = [];
         private readonly Dictionary<string, string> _headerRelationshipMapping = [];
         private readonly Dictionary<string, string> _footerRelationshipMapping = [];
-        private DocumentPackageData? _packageData;
+        private DocumentPackageData.DocumentPackageData? _packageData;
 
         /// <summary>
         /// Writes a document tree to a file
@@ -819,12 +820,18 @@ namespace WordDocumentParser
                 if (updatedXml.TrimStart().StartsWith("<w:sdt"))
                 {
                     var sdtBlock = new SdtBlock(updatedXml);
+
+                    // Update the SDT content if the node has been modified
+                    UpdateSdtBlockContent(sdtBlock, node);
+
                     FixIndentationAttributes(sdtBlock);
                     _body!.Append(sdtBlock);
                 }
                 else
                 {
+                    // Update paragraph with inline SDT content if present
                     var paragraph = new Paragraph(updatedXml);
+                    UpdateParagraphSdtContent(paragraph, node);
                     FixIndentationAttributes(paragraph);
                     _body!.Append(paragraph);
                 }
@@ -892,12 +899,18 @@ namespace WordDocumentParser
                 if (updatedXml.TrimStart().StartsWith("<w:sdt"))
                 {
                     var sdtBlock = new SdtBlock(updatedXml);
+
+                    // Update the SDT content if the node has been modified
+                    UpdateSdtBlockContent(sdtBlock, node);
+
                     FixIndentationAttributes(sdtBlock);
                     _body!.Append(sdtBlock);
                 }
                 else
                 {
+                    // Update paragraph with inline SDT content if present
                     var paragraph = new Paragraph(updatedXml);
+                    UpdateParagraphSdtContent(paragraph, node);
                     FixIndentationAttributes(paragraph);
                     _body!.Append(paragraph);
                 }
@@ -960,6 +973,10 @@ namespace WordDocumentParser
             {
                 var updatedXml = UpdateImageRelationships(node.OriginalXml);
                 var sdtBlock = new SdtBlock(updatedXml);
+
+                // Update the SDT content if the node has been modified
+                UpdateSdtBlockContent(sdtBlock, node);
+
                 FixIndentationAttributes(sdtBlock);
                 _body!.Append(sdtBlock);
             }
@@ -969,6 +986,210 @@ namespace WordDocumentParser
                 foreach (var child in node.Children)
                 {
                     ProcessNode(child);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the content of an SDT block based on modified node values
+        /// </summary>
+        private void UpdateSdtBlockContent(SdtBlock sdtBlock, DocumentNode node)
+        {
+            var ccProps = node.ContentControlProperties;
+            if (ccProps == null) return;
+
+            // Get the SDT content element
+            var sdtContent = sdtBlock.SdtContentBlock;
+            if (sdtContent == null) return;
+
+            // Get the new text value
+            var newText = node.HasFormattedRuns
+                ? string.Concat(node.Runs.Select(r => r.IsTab ? "\t" : r.IsBreak ? "" : r.Text))
+                : node.Text;
+
+            // Update the SDT properties based on control type
+            var sdtPr = sdtBlock.SdtProperties;
+            if (sdtPr != null)
+            {
+                UpdateSdtProperties(sdtPr, ccProps);
+            }
+
+            // Update the text content within the SDT
+            // Find all Text elements within the content and update them
+            var textElements = sdtContent.Descendants<Text>().ToList();
+            if (textElements.Count > 0)
+            {
+                // Clear all but the first text element and update the first one
+                var firstText = textElements[0];
+                firstText.Text = newText;
+
+                // Remove extra text elements (if any)
+                for (int i = 1; i < textElements.Count; i++)
+                {
+                    textElements[i].Remove();
+                }
+            }
+            else
+            {
+                // No text elements found, try to add text to the first run in the first paragraph
+                var firstPara = sdtContent.GetFirstChild<Paragraph>();
+                if (firstPara != null)
+                {
+                    var firstRun = firstPara.GetFirstChild<Run>();
+                    if (firstRun != null)
+                    {
+                        // Remove any existing text children
+                        foreach (var existingText in firstRun.Elements<Text>().ToList())
+                        {
+                            existingText.Remove();
+                        }
+                        firstRun.Append(new Text(newText) { Space = SpaceProcessingModeValues.Preserve });
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates the SDT properties based on the content control properties
+        /// </summary>
+        private void UpdateSdtProperties(SdtProperties sdtPr, ContentControlProperties ccProps)
+        {
+            switch (ccProps.Type)
+            {
+                case ContentControlType.Checkbox:
+                    UpdateCheckboxProperties(sdtPr, ccProps);
+                    break;
+                case ContentControlType.Date:
+                    UpdateDateProperties(sdtPr, ccProps);
+                    break;
+                case ContentControlType.DropDownList:
+                case ContentControlType.ComboBox:
+                    // For dropdowns and comboboxes, the text content is the main update
+                    // The selected value is represented by the displayed text
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Updates checkbox-specific properties in SDT
+        /// </summary>
+        private void UpdateCheckboxProperties(SdtProperties sdtPr, ContentControlProperties ccProps)
+        {
+            // Find the w14:checkbox element
+            var checkbox = sdtPr.Descendants().FirstOrDefault(e => e.LocalName == "checkbox");
+            if (checkbox != null)
+            {
+                // Find the w14:checked element
+                var checkedElement = checkbox.Descendants().FirstOrDefault(e => e.LocalName == "checked");
+                if (checkedElement != null)
+                {
+                    // Update the val attribute
+                    var valAttr = checkedElement.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+                    var newValue = ccProps.IsChecked == true ? "1" : "0";
+
+                    if (valAttr.LocalName != null)
+                    {
+                        // Create a new OpenXmlAttribute with the updated value
+                        var attrs = checkedElement.GetAttributes().ToList();
+                        checkedElement.ClearAllAttributes();
+                        foreach (var attr in attrs)
+                        {
+                            if (attr.LocalName == "val")
+                            {
+                                checkedElement.SetAttribute(new OpenXmlAttribute(attr.Prefix, attr.LocalName, attr.NamespaceUri, newValue));
+                            }
+                            else
+                            {
+                                checkedElement.SetAttribute(attr);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates date-specific properties in SDT
+        /// </summary>
+        private void UpdateDateProperties(SdtProperties sdtPr, ContentControlProperties ccProps)
+        {
+            var datePr = sdtPr.GetFirstChild<SdtContentDate>();
+            if (datePr != null && ccProps.DateValue.HasValue)
+            {
+                datePr.FullDate = ccProps.DateValue.Value;
+            }
+        }
+
+        /// <summary>
+        /// Updates inline SDT content (SdtRun) within a paragraph based on modified node runs
+        /// </summary>
+        private void UpdateParagraphSdtContent(Paragraph paragraph, DocumentNode node)
+        {
+            // Find all SdtRun elements in the paragraph
+            var sdtRuns = paragraph.Descendants<SdtRun>().ToList();
+            if (sdtRuns.Count == 0 || node.Runs.Count == 0) return;
+
+            // Build a map of content control IDs to their new values
+            var ccValueMap = new Dictionary<int, (string text, ContentControlProperties props)>();
+            foreach (var run in node.Runs)
+            {
+                if (run.ContentControlProperties != null && run.ContentControlProperties.Id.HasValue)
+                {
+                    var id = run.ContentControlProperties.Id.Value;
+                    if (!ccValueMap.ContainsKey(id))
+                    {
+                        ccValueMap[id] = (run.Text, run.ContentControlProperties);
+                    }
+                    else
+                    {
+                        // Append text for runs with the same content control ID
+                        var existing = ccValueMap[id];
+                        ccValueMap[id] = (existing.text + run.Text, run.ContentControlProperties);
+                    }
+                }
+            }
+
+            // Update each SdtRun
+            foreach (var sdtRun in sdtRuns)
+            {
+                var sdtPr = sdtRun.SdtProperties;
+                var sdtContent = sdtRun.SdtContentRun;
+
+                if (sdtPr == null || sdtContent == null) continue;
+
+                // Get the ID of this SDT
+                var sdtId = sdtPr.GetFirstChild<SdtId>()?.Val?.Value;
+                if (sdtId.HasValue && ccValueMap.TryGetValue(sdtId.Value, out var newValue))
+                {
+                    // Update properties if needed (e.g., checkbox state)
+                    UpdateSdtProperties(sdtPr, newValue.props);
+
+                    // Update text content
+                    var textElements = sdtContent.Descendants<Text>().ToList();
+                    if (textElements.Count > 0)
+                    {
+                        var firstText = textElements[0];
+                        firstText.Text = newValue.text;
+
+                        // Remove extra text elements
+                        for (int i = 1; i < textElements.Count; i++)
+                        {
+                            textElements[i].Remove();
+                        }
+                    }
+                    else
+                    {
+                        // Try to add text to the first run
+                        var firstRun = sdtContent.GetFirstChild<Run>();
+                        if (firstRun != null)
+                        {
+                            foreach (var existingText in firstRun.Elements<Text>().ToList())
+                            {
+                                existingText.Remove();
+                            }
+                            firstRun.Append(new Text(newValue.text) { Space = SpaceProcessingModeValues.Preserve });
+                        }
+                    }
                 }
             }
         }

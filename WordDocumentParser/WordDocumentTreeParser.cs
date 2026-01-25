@@ -1,6 +1,8 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using WordDocumentParser.DocumentPackageData;
+using WordDocumentParser.FormattingModels;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using WpTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
@@ -65,9 +67,9 @@ public class WordDocumentTreeParser : IDisposable
     /// <summary>
     /// Extracts all document package data for round-trip preservation
     /// </summary>
-    private DocumentPackageData ExtractPackageData()
+    private DocumentPackageData.DocumentPackageData ExtractPackageData()
     {
-        var packageData = new DocumentPackageData();
+        var packageData = new DocumentPackageData.DocumentPackageData();
 
         // Store original document XML
         if (_mainPart?.Document is not null)
@@ -500,16 +502,99 @@ public class WordDocumentTreeParser : IDisposable
     {
         List<FormattedRun> formattedRuns = [];
 
+        // Track field state for complex fields (fldChar-based fields like DOCPROPERTY)
+        var inField = false;
+        string? currentFieldCode = null;
+        var fieldResultRuns = new List<FormattedRun>();
+
         foreach (var child in para.ChildElements)
         {
             switch (child)
             {
                 case Run run:
-                    formattedRuns.AddRange(ProcessRun(run));
+                    // Check for field characters
+                    var fldChar = run.GetFirstChild<FieldChar>();
+                    if (fldChar?.FieldCharType?.Value is not null)
+                    {
+                        var charType = fldChar.FieldCharType.Value;
+                        if (charType == FieldCharValues.Begin)
+                        {
+                            inField = true;
+                            currentFieldCode = null;
+                            fieldResultRuns.Clear();
+                        }
+                        else if (charType == FieldCharValues.Separate)
+                        {
+                            // Field code is complete, now collecting result
+                        }
+                        else if (charType == FieldCharValues.End)
+                        {
+                            // Process the completed field
+                            if (currentFieldCode is not null && IsDocPropertyField(currentFieldCode))
+                            {
+                                var propInfo = ParseDocPropertyField(currentFieldCode);
+                                // Create a single run for the document property field
+                                var fieldValue = string.Concat(fieldResultRuns.Select(r => r.Text));
+                                var propField = new DocumentPropertyField
+                                {
+                                    PropertyName = propInfo.propertyName,
+                                    PropertyType = propInfo.propertyType,
+                                    Value = fieldValue,
+                                    FieldCode = currentFieldCode
+                                };
+
+                                // Look up the actual value from document properties if available
+                                propField.Value = ResolveDocumentPropertyValue(propInfo.propertyName, propInfo.propertyType) ?? fieldValue;
+
+                                formattedRuns.Add(new FormattedRun
+                                {
+                                    Text = propField.Value ?? "",
+                                    DocumentPropertyField = propField,
+                                    Formatting = fieldResultRuns.FirstOrDefault()?.Formatting ?? new RunFormatting()
+                                });
+                            }
+                            else
+                            {
+                                // Not a DOCPROPERTY field, add result runs normally
+                                formattedRuns.AddRange(fieldResultRuns);
+                            }
+                            inField = false;
+                            currentFieldCode = null;
+                            fieldResultRuns.Clear();
+                        }
+                        continue;
+                    }
+
+                    // Check for field code
+                    var fieldCode = run.GetFirstChild<FieldCode>();
+                    if (fieldCode is not null && inField)
+                    {
+                        currentFieldCode = (currentFieldCode ?? "") + fieldCode.Text;
+                        continue;
+                    }
+
+                    // Process the run
+                    var runs = ProcessRun(run);
+                    if (inField && currentFieldCode is not null)
+                    {
+                        // This is a field result run
+                        fieldResultRuns.AddRange(runs);
+                    }
+                    else
+                    {
+                        formattedRuns.AddRange(runs);
+                    }
                     break;
+
                 case Hyperlink hyperlink:
                     formattedRuns.AddRange(ProcessHyperlinkRuns(hyperlink));
                     break;
+
+                case SdtRun sdtRun:
+                    // Handle inline content controls
+                    formattedRuns.AddRange(ProcessInlineSdt(sdtRun));
+                    break;
+
                 case BookmarkStart:
                 case BookmarkEnd:
                 case ProofError:
@@ -519,6 +604,139 @@ public class WordDocumentTreeParser : IDisposable
         }
 
         return formattedRuns;
+    }
+
+    /// <summary>
+    /// Checks if a field code is a DOCPROPERTY field
+    /// </summary>
+    private static bool IsDocPropertyField(string fieldCode)
+    {
+        var trimmed = fieldCode.Trim();
+        return trimmed.StartsWith("DOCPROPERTY", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith(" DOCPROPERTY", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Parses a DOCPROPERTY field code to extract property information
+    /// </summary>
+    private static (string propertyName, DocumentPropertyType propertyType) ParseDocPropertyField(string fieldCode)
+    {
+        // Field code format: " DOCPROPERTY  PropertyName  \* MERGEFORMAT "
+        var trimmed = fieldCode.Trim();
+        var parts = trimmed.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+
+        var propertyName = "";
+        if (parts.Length >= 2)
+        {
+            // Skip "DOCPROPERTY" and get the property name
+            // Handle quoted property names
+            var nameIndex = 1;
+            if (parts[nameIndex].StartsWith('"'))
+            {
+                // Find the closing quote
+                var nameParts = new List<string>();
+                for (var i = nameIndex; i < parts.Length; i++)
+                {
+                    nameParts.Add(parts[i]);
+                    if (parts[i].EndsWith('"'))
+                        break;
+                }
+                propertyName = string.Join(" ", nameParts).Trim('"');
+            }
+            else
+            {
+                propertyName = parts[nameIndex];
+            }
+        }
+
+        return (propertyName, DeterminePropertyType(propertyName));
+    }
+
+    /// <summary>
+    /// Resolves a document property value from the cached document properties
+    /// </summary>
+    private string? ResolveDocumentPropertyValue(string propertyName, DocumentPropertyType propertyType)
+    {
+        if (_document is null) return null;
+
+        return propertyType switch
+        {
+            DocumentPropertyType.Core => GetCorePropertyValue(propertyName),
+            DocumentPropertyType.Extended => GetExtendedPropertyValue(propertyName),
+            DocumentPropertyType.Custom => GetCustomPropertyValue(propertyName),
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Gets a core document property value
+    /// </summary>
+    private string? GetCorePropertyValue(string propertyName)
+    {
+        var props = _document?.PackageProperties;
+        if (props is null) return null;
+
+        return propertyName.ToLowerInvariant() switch
+        {
+            "title" => props.Title,
+            "subject" => props.Subject,
+            "creator" or "author" => props.Creator,
+            "keywords" => props.Keywords,
+            "description" or "comments" => props.Description,
+            "lastmodifiedby" => props.LastModifiedBy,
+            "revision" => props.Revision,
+            "created" => props.Created?.ToString("g"),
+            "modified" => props.Modified?.ToString("g"),
+            "category" => props.Category,
+            "contentstatus" or "status" => props.ContentStatus,
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Gets an extended document property value
+    /// </summary>
+    private string? GetExtendedPropertyValue(string propertyName)
+    {
+        var extProps = _document?.ExtendedFilePropertiesPart?.Properties;
+        if (extProps is null) return null;
+
+        return propertyName.ToLowerInvariant() switch
+        {
+            "template" => extProps.Template?.Text,
+            "application" => extProps.Application?.Text,
+            "appversion" => extProps.ApplicationVersion?.Text,
+            "company" => extProps.Company?.Text,
+            "manager" => extProps.Manager?.Text,
+            "pages" => extProps.Pages?.Text,
+            "words" => extProps.Words?.Text,
+            "characters" => extProps.Characters?.Text,
+            "characterswithspaces" => extProps.CharactersWithSpaces?.Text,
+            "lines" => extProps.Lines?.Text,
+            "paragraphs" => extProps.Paragraphs?.Text,
+            "totaltime" => extProps.TotalTime?.Text,
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Gets a custom document property value
+    /// </summary>
+    private string? GetCustomPropertyValue(string propertyName)
+    {
+        var customProps = _document?.CustomFilePropertiesPart?.Properties;
+        if (customProps is null) return null;
+
+        foreach (var prop in customProps.Elements<DocumentFormat.OpenXml.CustomProperties.CustomDocumentProperty>())
+        {
+            if (string.Equals(prop.Name?.Value, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                // Get the value from the property (could be various types)
+                return prop.InnerText;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1185,6 +1403,9 @@ public class WordDocumentTreeParser : IDisposable
         var content = sdtBlock.SdtContentBlock;
         if (content is null) return null;
 
+        // Extract content control properties
+        var ccProperties = ExtractContentControlProperties(sdtBlock.SdtProperties);
+
         // Get all child elements (paragraphs and tables)
         var childElements = content.ChildElements.ToList();
 
@@ -1200,15 +1421,23 @@ public class WordDocumentTreeParser : IDisposable
                 // Store the entire SDT block XML to preserve structure for complex content
                 paraNode.OriginalXml = sdtBlock.OuterXml;
                 paraNode.Metadata["IsSdtContent"] = true;
+                paraNode.ContentControlProperties = ccProperties;
+
+                // Set the value in content control properties
+                if (ccProperties is not null)
+                {
+                    ccProperties.Value = paraNode.GetText();
+                }
             }
             return paraNode;
         }
 
         // For SDT blocks with multiple elements, create a container node and store original XML
-        var containerNode = new DocumentNode(ContentType.Paragraph, "")
+        var containerNode = new DocumentNode(ContentType.ContentControl, "")
         {
             OriginalXml = sdtBlock.OuterXml,
-            Metadata = { ["IsSdtBlock"] = true }
+            Metadata = { ["IsSdtBlock"] = true },
+            ContentControlProperties = ccProperties
         };
 
         // Process each child element
@@ -1227,8 +1456,310 @@ public class WordDocumentTreeParser : IDisposable
             }
         }
 
+        // Set the value in content control properties from children
+        if (ccProperties is not null && containerNode.Children.Count > 0)
+        {
+            ccProperties.Value = string.Join(" ", containerNode.Children.Select(c => c.GetText()).Where(t => !string.IsNullOrWhiteSpace(t)));
+        }
+
+        // Set Text for the container
+        containerNode.Text = ccProperties?.Value ?? "";
+
         // Return the container if it has children, otherwise null
         return containerNode.Children.Count > 0 ? containerNode : null;
+    }
+
+    /// <summary>
+    /// Processes inline structured document tags (content controls within a paragraph)
+    /// </summary>
+    private List<FormattedRun> ProcessInlineSdt(SdtRun sdtRun)
+    {
+        var result = new List<FormattedRun>();
+        var ccProperties = ExtractContentControlProperties(sdtRun.SdtProperties);
+        var content = sdtRun.SdtContentRun;
+
+        if (content is null) return result;
+
+        // Process runs within the SDT
+        foreach (var run in content.Elements<Run>())
+        {
+            var runs = ProcessRun(run);
+            // Mark all runs as belonging to a content control
+            foreach (var r in runs)
+            {
+                // Always set content control properties on the run
+                r.ContentControlProperties = ccProperties;
+
+                // If this is a document property content control, also create a document property field
+                if (ccProperties?.Type == ContentControlType.DocumentProperty &&
+                    !string.IsNullOrEmpty(ccProperties.DataBindingXPath))
+                {
+                    var propName = ExtractPropertyNameFromXPath(ccProperties.DataBindingXPath);
+                    r.DocumentPropertyField = new DocumentPropertyField
+                    {
+                        PropertyName = propName,
+                        PropertyType = DeterminePropertyType(propName),
+                        Value = r.Text,
+                        FieldCode = ccProperties.DataBindingXPath
+                    };
+                }
+            }
+            result.AddRange(runs);
+        }
+
+        // Set the value in content control properties
+        if (ccProperties is not null)
+        {
+            ccProperties.Value = string.Concat(result.Select(r => r.Text));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Extracts content control properties from an SdtProperties element
+    /// </summary>
+    private ContentControlProperties? ExtractContentControlProperties(SdtProperties? sdtPr)
+    {
+        if (sdtPr is null) return null;
+
+        var props = new ContentControlProperties();
+
+        // ID
+        props.Id = sdtPr.GetFirstChild<SdtId>()?.Val?.Value;
+
+        // Tag
+        props.Tag = sdtPr.GetFirstChild<Tag>()?.Val?.Value;
+
+        // Alias (Title)
+        props.Alias = sdtPr.GetFirstChild<SdtAlias>()?.Val?.Value;
+
+        // Lock settings - use fully qualified name to avoid ambiguity with System.Threading.Lock
+        var lockSetting = sdtPr.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.Lock>();
+        if (lockSetting is not null)
+        {
+            var lockVal = lockSetting.Val?.Value;
+            props.LockContentControl = lockVal == LockingValues.SdtLocked || lockVal == LockingValues.SdtContentLocked;
+            props.LockContents = lockVal == LockingValues.ContentLocked || lockVal == LockingValues.SdtContentLocked;
+        }
+
+        // Placeholder text - get from DocPartGallery or the placeholder's child element
+        var placeholder = sdtPr.GetFirstChild<SdtPlaceholder>();
+        if (placeholder is not null)
+        {
+            // The placeholder contains a DocPartGallery element
+            var docPartGallery = placeholder.GetFirstChild<DocPartGallery>();
+            if (docPartGallery?.Val?.Value is not null)
+            {
+                props.PlaceholderText = docPartGallery.Val.Value;
+            }
+        }
+
+        // Show placeholder status
+        props.ShowingPlaceholder = sdtPr.GetFirstChild<ShowingPlaceholder>() is not null;
+
+        // Data binding
+        var dataBinding = sdtPr.GetFirstChild<DataBinding>();
+        if (dataBinding is not null)
+        {
+            props.DataBindingPrefixMappings = dataBinding.PrefixMappings?.Value;
+            props.DataBindingXPath = dataBinding.XPath?.Value;
+            props.DataBindingStoreItemId = dataBinding.StoreItemId?.Value;
+        }
+
+        // Appearance and Color are Word 2013+ features (w15 namespace)
+        // Try to get them from extended attributes if present
+        var w15Appearance = sdtPr.Descendants().FirstOrDefault(e => e.LocalName == "appearance");
+        if (w15Appearance is not null)
+        {
+            var valAttr = w15Appearance.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+            if (!string.IsNullOrEmpty(valAttr.Value))
+            {
+                props.Appearance = valAttr.Value;
+            }
+        }
+
+        var w15Color = sdtPr.Descendants().FirstOrDefault(e => e.LocalName == "color");
+        if (w15Color is not null)
+        {
+            var valAttr = w15Color.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+            if (!string.IsNullOrEmpty(valAttr.Value))
+            {
+                props.Color = valAttr.Value;
+            }
+        }
+
+        // Determine content control type based on specific elements
+        props.Type = DetermineContentControlType(sdtPr);
+
+        // Type-specific properties
+        switch (props.Type)
+        {
+            case ContentControlType.Date:
+                var datePr = sdtPr.GetFirstChild<SdtContentDate>();
+                if (datePr is not null)
+                {
+                    props.DateFormat = datePr.DateFormat?.Val?.Value;
+                    // Get locale from language element
+                    var langElem = datePr.Descendants().FirstOrDefault(e => e.LocalName == "lid");
+                    if (langElem is not null)
+                    {
+                        var valAttr = langElem.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+                        props.DateLocale = valAttr.Value;
+                    }
+                    // Get the date value
+                    if (datePr.FullDate is not null)
+                    {
+                        props.DateValue = datePr.FullDate.Value;
+                    }
+                }
+                break;
+
+            case ContentControlType.DropDownList:
+                var dropDown = sdtPr.GetFirstChild<SdtContentDropDownList>();
+                if (dropDown is not null)
+                {
+                    foreach (var item in dropDown.Elements<ListItem>())
+                    {
+                        props.ListItems.Add(new ContentControlListItem
+                        {
+                            DisplayText = item.DisplayText?.Value,
+                            Value = item.Value?.Value
+                        });
+                    }
+                }
+                break;
+
+            case ContentControlType.ComboBox:
+                var comboBox = sdtPr.GetFirstChild<SdtContentComboBox>();
+                if (comboBox is not null)
+                {
+                    foreach (var item in comboBox.Elements<ListItem>())
+                    {
+                        props.ListItems.Add(new ContentControlListItem
+                        {
+                            DisplayText = item.DisplayText?.Value,
+                            Value = item.Value?.Value
+                        });
+                    }
+                }
+                break;
+
+            case ContentControlType.Checkbox:
+                // Checkbox state is in w14:checkbox element
+                var checkbox = sdtPr.Descendants().FirstOrDefault(e => e.LocalName == "checkbox");
+                if (checkbox is not null)
+                {
+                    var checkedState = checkbox.Descendants().FirstOrDefault(e => e.LocalName == "checked");
+                    if (checkedState is not null)
+                    {
+                        var valAttr = checkedState.GetAttributes().FirstOrDefault(a => a.LocalName == "val");
+                        props.IsChecked = valAttr.Value == "1" || valAttr.Value?.ToLower() == "true";
+                    }
+                }
+                break;
+        }
+
+        return props;
+    }
+
+    /// <summary>
+    /// Determines the type of content control from its properties
+    /// </summary>
+    private static ContentControlType DetermineContentControlType(SdtProperties sdtPr)
+    {
+        // Check for specific content control type elements
+        if (sdtPr.GetFirstChild<SdtContentRichText>() is not null)
+            return ContentControlType.RichText;
+        if (sdtPr.GetFirstChild<SdtContentText>() is not null)
+            return ContentControlType.PlainText;
+        if (sdtPr.GetFirstChild<SdtContentPicture>() is not null)
+            return ContentControlType.Picture;
+        if (sdtPr.GetFirstChild<SdtContentDate>() is not null)
+            return ContentControlType.Date;
+        if (sdtPr.GetFirstChild<SdtContentDropDownList>() is not null)
+            return ContentControlType.DropDownList;
+        if (sdtPr.GetFirstChild<SdtContentComboBox>() is not null)
+            return ContentControlType.ComboBox;
+        if (sdtPr.GetFirstChild<SdtContentGroup>() is not null)
+            return ContentControlType.Group;
+        if (sdtPr.GetFirstChild<SdtContentBibliography>() is not null)
+            return ContentControlType.Bibliography;
+        if (sdtPr.GetFirstChild<SdtContentCitation>() is not null)
+            return ContentControlType.Citation;
+        if (sdtPr.GetFirstChild<SdtContentEquation>() is not null)
+            return ContentControlType.Equation;
+
+        // Check for checkbox (w14:checkbox)
+        if (sdtPr.Descendants().Any(e => e.LocalName == "checkbox"))
+            return ContentControlType.Checkbox;
+
+        // Check for document property binding
+        var dataBinding = sdtPr.GetFirstChild<DataBinding>();
+        if (dataBinding?.XPath?.Value is not null)
+        {
+            var xpath = dataBinding.XPath.Value;
+            if (xpath.Contains("coreProperties") || xpath.Contains("extended-properties") ||
+                xpath.Contains("custom-properties"))
+            {
+                return ContentControlType.DocumentProperty;
+            }
+        }
+
+        // Check for repeating section
+        if (sdtPr.Descendants().Any(e => e.LocalName == "repeatingSection"))
+            return ContentControlType.RepeatingSection;
+        if (sdtPr.Descendants().Any(e => e.LocalName == "repeatingSectionItem"))
+            return ContentControlType.RepeatingSectionItem;
+
+        return ContentControlType.Unknown;
+    }
+
+    /// <summary>
+    /// Extracts property name from an XPath expression
+    /// </summary>
+    private static string ExtractPropertyNameFromXPath(string xpath)
+    {
+        // XPath typically looks like: /ns0:coreProperties[1]/ns0:title[1]
+        // or /ns0:Properties[1]/ns0:Company[1]
+        var parts = xpath.Split('/');
+        if (parts.Length > 0)
+        {
+            var lastPart = parts[^1];
+            // Remove namespace prefix and index
+            var colonIndex = lastPart.IndexOf(':');
+            if (colonIndex >= 0)
+                lastPart = lastPart[(colonIndex + 1)..];
+            var bracketIndex = lastPart.IndexOf('[');
+            if (bracketIndex >= 0)
+                lastPart = lastPart[..bracketIndex];
+            return lastPart;
+        }
+        return xpath;
+    }
+
+    /// <summary>
+    /// Determines the document property type from the property name
+    /// </summary>
+    private static DocumentPropertyType DeterminePropertyType(string propertyName)
+    {
+        var corePropNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "title", "subject", "creator", "keywords", "description",
+            "lastModifiedBy", "revision", "created", "modified", "category", "contentStatus"
+        };
+
+        var extendedPropNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "template", "application", "appVersion", "company", "manager",
+            "pages", "words", "characters", "charactersWithSpaces", "lines", "paragraphs", "totalTime"
+        };
+
+        if (corePropNames.Contains(propertyName))
+            return DocumentPropertyType.Core;
+        if (extendedPropNames.Contains(propertyName))
+            return DocumentPropertyType.Extended;
+        return DocumentPropertyType.Custom;
     }
 
     public void Dispose()

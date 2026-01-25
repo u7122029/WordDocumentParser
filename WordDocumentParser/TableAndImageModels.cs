@@ -1,3 +1,5 @@
+using WordDocumentParser.FormattingModels;
+
 namespace WordDocumentParser;
 
 /// <summary>

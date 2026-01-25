@@ -1,3 +1,5 @@
+using WordDocumentParser.FormattingModels;
+
 namespace WordDocumentParser;
 
 /// <summary>
@@ -13,7 +15,8 @@ public enum ContentType
     List,
     ListItem,
     HyperlinkText,
-    TextRun
+    TextRun,
+    ContentControl
 }
 
 /// <summary>
@@ -46,7 +49,7 @@ public class DocumentNode(ContentType type)
     /// <summary>
     /// Original document package data for round-trip fidelity (only set on root Document node)
     /// </summary>
-    public DocumentPackageData? PackageData { get; set; }
+    public DocumentPackageData.DocumentPackageData? PackageData { get; set; }
 
     /// <summary>
     /// Original OpenXML content for exact round-trip (stores full paragraph/table XML)
@@ -54,16 +57,148 @@ public class DocumentNode(ContentType type)
     public string? OriginalXml { get; set; }
 
     /// <summary>
-    /// Gets the plain text from formatted runs, or the Text property if no runs exist
+    /// Properties for content controls (SDT blocks). Only set for nodes that represent content controls.
+    /// </summary>
+    public ContentControlProperties? ContentControlProperties { get; set; }
+
+    /// <summary>
+    /// Returns true if this node is or contains a content control
+    /// </summary>
+    public bool IsContentControl => ContentControlProperties is not null ||
+                                    (Metadata.TryGetValue("IsSdtContent", out var isSdt) && isSdt is true) ||
+                                    (Metadata.TryGetValue("IsSdtBlock", out var isSdtBlock) && isSdtBlock is true);
+
+    /// <summary>
+    /// Gets the plain text from formatted runs, or the Text property if no runs exist.
+    /// Document property field values and content control values are included as their actual values.
     /// </summary>
     public string GetText() => Runs.Count > 0
         ? string.Concat(Runs.Select(r => r.IsTab ? "\t" : r.IsBreak ? " " : r.Text))
         : Text;
 
     /// <summary>
+    /// Gets text with metadata annotations for document properties and content controls.
+    /// Instead of showing just values, this shows metadata like property names, types, and current values.
+    /// </summary>
+    public string GetTextWithMetadata()
+    {
+        var textValue = GetText().Trim();
+
+        // If this is a content control node with properties, always show metadata
+        if (ContentControlProperties is not null)
+        {
+            var ccProps = ContentControlProperties;
+            var identifier = !string.IsNullOrEmpty(ccProps.Alias) ? ccProps.Alias :
+                            !string.IsNullOrEmpty(ccProps.Tag) ? ccProps.Tag :
+                            ccProps.Id?.ToString() ?? "unnamed";
+
+            // For document property content controls with data binding, show the property info
+            if (ccProps.Type == ContentControlType.DocumentProperty && !string.IsNullOrEmpty(ccProps.DataBindingXPath))
+            {
+                var propName = ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
+                return $"[DocProperty:{propName}=\"{textValue}\"]";
+            }
+
+            return $"[ContentControl:{ccProps.Type} {identifier}=\"{textValue}\"]";
+        }
+
+        // Check for document property fields in runs
+        if (Runs.Count == 0)
+        {
+            return Text;
+        }
+
+        var parts = new List<string>();
+
+        // Group consecutive runs by their content control properties to avoid repeating metadata
+        var i = 0;
+        while (i < Runs.Count)
+        {
+            var run = Runs[i];
+
+            if (run.IsTab)
+            {
+                parts.Add("\t");
+                i++;
+            }
+            else if (run.IsBreak)
+            {
+                parts.Add(" ");
+                i++;
+            }
+            else if (run.IsDocumentPropertyField && run.DocumentPropertyField is not null)
+            {
+                parts.Add(run.DocumentPropertyField.ToMetadataString());
+                i++;
+            }
+            else if (run.IsContentControlRun && run.ContentControlProperties is not null)
+            {
+                // Collect all consecutive runs with the same content control
+                var ccRuns = new List<FormattedRun> { run };
+                var ccProps = run.ContentControlProperties;
+                i++;
+                while (i < Runs.Count &&
+                       Runs[i].ContentControlProperties == ccProps &&
+                       !Runs[i].IsTab && !Runs[i].IsBreak)
+                {
+                    ccRuns.Add(Runs[i]);
+                    i++;
+                }
+
+                var ccText = string.Concat(ccRuns.Select(r => r.Text));
+                var identifier = !string.IsNullOrEmpty(ccProps.Alias) ? ccProps.Alias :
+                                !string.IsNullOrEmpty(ccProps.Tag) ? ccProps.Tag :
+                                ccProps.Id?.ToString() ?? "unnamed";
+
+                if (ccProps.Type == ContentControlType.DocumentProperty && !string.IsNullOrEmpty(ccProps.DataBindingXPath))
+                {
+                    var propName = ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
+                    parts.Add($"[DocProperty:{propName}=\"{ccText}\"]");
+                }
+                else
+                {
+                    parts.Add($"[ContentControl:{ccProps.Type} {identifier}=\"{ccText}\"]");
+                }
+            }
+            else
+            {
+                parts.Add(run.Text);
+                i++;
+            }
+        }
+
+        return string.Concat(parts);
+    }
+
+    /// <summary>
+    /// Extracts property name from XPath (helper for GetTextWithMetadata)
+    /// </summary>
+    private static string ExtractPropertyNameFromXPath(string xpath)
+    {
+        var parts = xpath.Split('/');
+        if (parts.Length > 0)
+        {
+            var lastPart = parts[^1];
+            var colonIndex = lastPart.IndexOf(':');
+            if (colonIndex >= 0)
+                lastPart = lastPart[(colonIndex + 1)..];
+            var bracketIndex = lastPart.IndexOf('[');
+            if (bracketIndex >= 0)
+                lastPart = lastPart[..bracketIndex];
+            return lastPart;
+        }
+        return xpath;
+    }
+
+    /// <summary>
     /// Returns true if this node has formatted runs
     /// </summary>
     public bool HasFormattedRuns => Runs.Count > 0;
+
+    /// <summary>
+    /// Returns true if this node contains any document property fields
+    /// </summary>
+    public bool HasDocumentPropertyFields => Runs.Any(r => r.IsDocumentPropertyField);
 
     public DocumentNode(ContentType type, string text) : this(type) => Text = text;
 
@@ -115,7 +250,7 @@ public class DocumentNode(ContentType type)
     {
         var prefix = new string(' ', indent * 2);
         var typeLabel = Type == ContentType.Heading ? $"H{HeadingLevel}" : Type.ToString();
-        var textPreview = Text.Length > 50 ? $"{Text[..47]}..." : Text;
+        var textPreview = Text.Length > 50 ? $"{Text[..47]}... ({GetTextWithMetadata()[..47]})" : $"{Text} ({GetTextWithMetadata()})";
         var result = $"{prefix}[{typeLabel}][{ParagraphFormatting?.StyleId}] {textPreview}\n";
 
         foreach (var child in Children)
