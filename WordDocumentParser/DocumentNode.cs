@@ -87,7 +87,7 @@ public class DocumentNode(ContentType type)
             // For document property content controls with data binding, show the property info
             if (ccProps.Type == ContentControlType.DocumentProperty && !string.IsNullOrEmpty(ccProps.DataBindingXPath))
             {
-                var propName = ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
+                var propName = DocumentPropertyHelpers.ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
                 return $"[DocProperty:{propName}=\"{textValue}\"]";
             }
 
@@ -144,7 +144,7 @@ public class DocumentNode(ContentType type)
 
                 if (ccProps.Type == ContentControlType.DocumentProperty && !string.IsNullOrEmpty(ccProps.DataBindingXPath))
                 {
-                    var propName = ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
+                    var propName = DocumentPropertyHelpers.ExtractPropertyNameFromXPath(ccProps.DataBindingXPath);
                     parts.Add($"[DocProperty:{propName}=\"{ccText}\"]");
                 }
                 else
@@ -160,26 +160,6 @@ public class DocumentNode(ContentType type)
         }
 
         return string.Concat(parts);
-    }
-
-    /// <summary>
-    /// Extracts property name from XPath (helper for GetTextWithMetadata)
-    /// </summary>
-    private static string ExtractPropertyNameFromXPath(string xpath)
-    {
-        var parts = xpath.Split('/');
-        if (parts.Length > 0)
-        {
-            var lastPart = parts[^1];
-            var colonIndex = lastPart.IndexOf(':');
-            if (colonIndex >= 0)
-                lastPart = lastPart[(colonIndex + 1)..];
-            var bracketIndex = lastPart.IndexOf('[');
-            if (bracketIndex >= 0)
-                lastPart = lastPart[..bracketIndex];
-            return lastPart;
-        }
-        return xpath;
     }
 
     /// <summary>
@@ -205,21 +185,6 @@ public class DocumentNode(ContentType type)
     {
         child.Parent = this;
         Children.Add(child);
-    }
-
-    /// <summary>
-    /// Gets all descendant nodes (recursive)
-    /// </summary>
-    public IEnumerable<DocumentNode> GetDescendants()
-    {
-        foreach (var child in Children)
-        {
-            yield return child;
-            foreach (var descendant in child.GetDescendants())
-            {
-                yield return descendant;
-            }
-        }
     }
 
     /// <summary>

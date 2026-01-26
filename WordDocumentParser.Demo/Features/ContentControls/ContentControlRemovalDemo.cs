@@ -26,7 +26,7 @@ public static class ContentControlRemovalDemo
             Console.WriteLine($"      - {node.GetTextWithMetadata()}");
         }
 
-        var docPropertyNodes = documentTree.GetNodesWithDocumentPropertyFields().ToList();
+        var docPropertyNodes = documentTree.Root.GetNodesWithDocumentPropertyFields().ToList();
         Console.WriteLine($"\n   Document Property Fields: {docPropertyNodes.Count}");
         foreach (var node in docPropertyNodes)
         {

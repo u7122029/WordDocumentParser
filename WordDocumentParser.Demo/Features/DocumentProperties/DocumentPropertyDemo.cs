@@ -1,121 +1,104 @@
 using System;
 using System.IO;
-using System.Linq;
-using DocumentFormat.OpenXml.CustomProperties;
-using DocumentFormat.OpenXml.Packaging;
-using DocumentFormat.OpenXml.VariantTypes;
+using WordDocumentParser.Extensions;
 
 namespace WordDocumentParser.Demo.Features.DocumentProperties;
 
 /// <summary>
-/// Demonstrates adding, changing, and removing a document property.
+/// Demonstrates the document properties API: get, set, and delete properties.
 /// </summary>
 public static class DocumentPropertyDemo
 {
-    private const string CustomPropertyFormatId = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
-
     public static void Run(string inputPath)
     {
-        var outputPathWithProperty = Path.Combine(
+        Console.WriteLine("=== Document Properties Demo ===\n");
+
+        // Parse the document
+        using var parser = new WordDocumentTreeParser();
+        WordDocument doc = parser.ParseFromFile(inputPath);
+
+        // 1. Display existing properties
+        Console.WriteLine("1. Existing properties:");
+        foreach (var (name, value) in doc.GetAllProperties())
+        {
+            Console.WriteLine($"   {name} = \"{value}\"");
+        }
+
+        // 2. Read properties using indexer
+        Console.WriteLine("\n2. Reading properties via indexer:");
+        var hasAnyProperties = false;
+        foreach (var (name, _) in doc.GetAllProperties())
+        {
+            hasAnyProperties = true;
+            Console.WriteLine($"   doc[\"{name}\"] = \"{doc[name] ?? "(not set)"}\"");
+        }
+
+        if (!hasAnyProperties)
+        {
+            Console.WriteLine("   (no properties found)");
+        }
+
+        // 3. Set built-in properties
+        Console.WriteLine("\n3. Setting built-in properties:");
+        doc["Title"] = "Demo Document";
+        doc["Author"] = "WordDocumentParser";
+        doc["Subject"] = "Property API Demo";
+        doc["Company"] = "Demo Corp";
+        Console.WriteLine($"   Title = \"{doc["Title"]}\"");
+        Console.WriteLine($"   Author = \"{doc["Author"]}\"");
+        Console.WriteLine($"   Subject = \"{doc["Subject"]}\"");
+        Console.WriteLine($"   Company = \"{doc["Company"]}\"");
+
+        // 4. Set custom properties (any unknown property name becomes custom)
+        Console.WriteLine("\n4. Setting custom properties:");
+        doc["ProjectCode"] = "DEMO-001";
+        doc["Department"] = "Engineering";
+        doc["ReviewStatus"] = "Draft";
+        Console.WriteLine($"   ProjectCode = \"{doc["ProjectCode"]}\"");
+        Console.WriteLine($"   Department = \"{doc["Department"]}\"");
+        Console.WriteLine($"   ReviewStatus = \"{doc["ReviewStatus"]}\"");
+
+        // 5. Access custom properties directly
+        Console.WriteLine("\n5. Custom properties dictionary:");
+        foreach (var (name, value) in doc.CustomProperties)
+        {
+            Console.WriteLine($"   {name} = \"{value}\"");
+        }
+
+        // 6. Update a custom property
+        Console.WriteLine("\n6. Updating custom property:");
+        Console.WriteLine($"   Before: ReviewStatus = \"{doc["ReviewStatus"]}\"");
+        doc["ReviewStatus"] = "Reviewed";
+        Console.WriteLine($"   After:  ReviewStatus = \"{doc["ReviewStatus"]}\"");
+
+        // 7. Delete properties (set to null or use RemoveProperty)
+        Console.WriteLine("\n7. Deleting properties:");
+        Console.WriteLine($"   HasProperty(\"Department\"): {doc.HasProperty("Department")}");
+        doc["Department"] = null; // Delete via indexer
+        Console.WriteLine($"   After delete: HasProperty(\"Department\"): {doc.HasProperty("Department")}");
+
+        doc.RemoveProperty("ReviewStatus"); // Delete via method
+        Console.WriteLine($"   After RemoveProperty: HasProperty(\"ReviewStatus\"): {doc.HasProperty("ReviewStatus")}");
+
+        // 8. Save and verify
+        var outputPath = Path.Combine(
             Path.GetDirectoryName(inputPath)!,
-            Path.GetFileNameWithoutExtension(inputPath) + "_docprops_added.docx");
-        var outputPathRemoved = Path.Combine(
-            Path.GetDirectoryName(inputPath)!,
-            Path.GetFileNameWithoutExtension(inputPath) + "_docprops_removed.docx");
+            Path.GetFileNameWithoutExtension(inputPath) + "_properties_demo.docx");
 
-        File.Copy(inputPath, outputPathWithProperty, true);
+        Console.WriteLine($"\n8. Saving to: {outputPath}");
+        doc.SaveToFile(outputPath);
 
-        const string propertyName = "DemoCustomProperty";
+        // 9. Re-parse and verify properties persisted
+        Console.WriteLine("\n9. Verifying saved document:");
+        using var verifyParser = new WordDocumentTreeParser();
+        var verifiedDoc = verifyParser.ParseFromFile(outputPath);
 
-        Console.WriteLine($"Document 1 (with property): {outputPathWithProperty}");
-        using (var doc = WordprocessingDocument.Open(outputPathWithProperty, true))
+        Console.WriteLine("   All properties in saved document:");
+        foreach (var (name, value) in verifiedDoc.GetAllProperties())
         {
-            var customPart = doc.CustomFilePropertiesPart ?? doc.AddCustomFilePropertiesPart();
-            customPart.Properties ??= new Properties();
-
-            var props = customPart.Properties;
-
-            Console.WriteLine("1. Adding custom property...");
-            if (FindCustomProperty(props, propertyName) == null)
-            {
-                AddCustomProperty(props, propertyName, "Initial Value");
-            }
-            UpdateCustomProperty(props, propertyName, "Updated Value");
-            props.Save();
-            Console.WriteLine($"   Saved: {propertyName} = \"{GetCustomPropertyValue(props, propertyName) ?? "(missing)"}\"");
+            Console.WriteLine($"   {name} = \"{value}\"");
         }
 
-        File.Copy(outputPathWithProperty, outputPathRemoved, true);
-        Console.WriteLine($"Document 2 (property removed): {outputPathRemoved}");
-
-        using (var doc = WordprocessingDocument.Open(outputPathRemoved, true))
-        {
-            var customPart = doc.CustomFilePropertiesPart ?? doc.AddCustomFilePropertiesPart();
-            customPart.Properties ??= new Properties();
-            var props = customPart.Properties;
-
-            Console.WriteLine("2. Removing custom property...");
-            if (RemoveCustomProperty(props, propertyName))
-            {
-                props.Save();
-                Console.WriteLine($"   Removed: {propertyName}");
-            }
-            else
-            {
-                Console.WriteLine("   Property was not found to remove.");
-            }
-        }
-    }
-
-    private static CustomDocumentProperty? FindCustomProperty(Properties props, string name)
-        => props.Elements<CustomDocumentProperty>()
-            .FirstOrDefault(p => string.Equals(p.Name?.Value, name, StringComparison.OrdinalIgnoreCase));
-
-    private static string? GetCustomPropertyValue(Properties props, string name)
-    {
-        var prop = FindCustomProperty(props, name);
-        return prop?.InnerText;
-    }
-
-    private static void AddCustomProperty(Properties props, string name, string value)
-    {
-        var nextPid = props.Elements<CustomDocumentProperty>()
-            .Select(p => (int?)p.PropertyId?.Value)
-            .Max() ?? 1;
-
-        var prop = new CustomDocumentProperty
-        {
-            Name = name,
-            FormatId = CustomPropertyFormatId,
-            PropertyId = nextPid + 1
-        };
-
-        prop.AppendChild(new VTLPWSTR(value));
-        props.AppendChild(prop);
-    }
-
-    private static void UpdateCustomProperty(Properties props, string name, string value)
-    {
-        var prop = FindCustomProperty(props, name);
-        if (prop == null)
-        {
-            AddCustomProperty(props, name, value);
-            return;
-        }
-
-        prop.RemoveAllChildren();
-        prop.AppendChild(new VTLPWSTR(value));
-    }
-
-    private static bool RemoveCustomProperty(Properties props, string name)
-    {
-        var prop = FindCustomProperty(props, name);
-        if (prop == null)
-        {
-            return false;
-        }
-
-        prop.Remove();
-        return true;
+        Console.WriteLine("\n=== Demo Complete ===");
     }
 }

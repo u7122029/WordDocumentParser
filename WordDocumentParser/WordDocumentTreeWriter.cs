@@ -7,6 +7,7 @@ using WordDocumentParser.Models.Formatting;
 using WordDocumentParser.Models.Images;
 using WordDocumentParser.Models.Package;
 using WordDocumentParser.Models.Tables;
+using WordDocumentParser.Extensions;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using PIC = DocumentFormat.OpenXml.Drawing.Pictures;
@@ -73,6 +74,9 @@ public class WordDocumentTreeWriter : IDocumentWriter
     /// </summary>
     private void BuildDocument(WordDocument document)
     {
+        // Sync custom properties to XML before saving
+        document.SyncCustomPropertiesToXml();
+
         // Clear mappings for fresh document
         _imageRelationshipMapping.Clear();
         _hyperlinkRelationshipMapping.Clear();

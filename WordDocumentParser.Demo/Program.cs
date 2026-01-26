@@ -39,9 +39,9 @@ class Program
             DocumentPropertyDemo.Run(filePath);
 
             // Demo: Write the parsed document back to a new file
-            Console.WriteLine("\n\nWriting Document Demo:");
-            Console.WriteLine("======================");
-            RoundTripDemo.Run(filePath);
+            // Console.WriteLine("\n\nWriting Document Demo:");
+            // Console.WriteLine("======================");
+            // RoundTripDemo.Run(filePath);
         }
         else
         {

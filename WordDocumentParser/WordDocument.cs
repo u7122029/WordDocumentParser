@@ -1,4 +1,6 @@
+using System.Xml.Linq;
 using WordDocumentParser.Core;
+using WordDocumentParser.Extensions;
 using WordDocumentParser.Models.Package;
 
 namespace WordDocumentParser;
@@ -9,6 +11,9 @@ namespace WordDocumentParser;
 /// </summary>
 public class WordDocument
 {
+    private Dictionary<string, string>? _customProperties;
+    private bool _customPropertiesParsed;
+
     /// <summary>
     /// The root node of the document content structure.
     /// Contains the hierarchical tree of headings, paragraphs, tables, and other content.
@@ -53,6 +58,360 @@ public class WordDocument
         Root = root;
         PackageData = packageData;
     }
+
+    #region Document Properties (Dictionary-Style Access)
+
+    /// <summary>
+    /// Gets or sets a document property by name.
+    /// Supports core properties, extended properties, and custom properties.
+    /// Property names are case-insensitive. Unknown property names are treated as custom properties.
+    /// Set to null to delete a property.
+    /// </summary>
+    /// <param name="propertyName">The name of the property to get or set.</param>
+    /// <returns>The property value as a string, or null if not found.</returns>
+    public string? this[string propertyName]
+    {
+        get => GetProperty(propertyName);
+        set
+        {
+            if (value is null)
+                RemoveProperty(propertyName);
+            else
+                SetProperty(propertyName, value);
+        }
+    }
+
+    /// <summary>
+    /// Custom document properties dictionary.
+    /// Changes to this dictionary are automatically serialized when the document is saved.
+    /// </summary>
+    public Dictionary<string, string> CustomProperties
+    {
+        get
+        {
+            EnsureCustomPropertiesParsed();
+            return _customProperties!;
+        }
+    }
+
+    /// <summary>
+    /// Gets a document property value by name (case-insensitive).
+    /// Checks core properties, extended properties, then custom properties.
+    /// </summary>
+    /// <param name="propertyName">The property name.</param>
+    /// <returns>The property value as a string, or null if not found.</returns>
+    public string? GetProperty(string propertyName)
+    {
+        var lowerName = propertyName.ToLowerInvariant();
+
+        // Check core and extended properties first
+        var builtInValue = lowerName switch
+        {
+            // Core properties
+            "title" => CoreProperties?.Title,
+            "subject" => CoreProperties?.Subject,
+            "creator" or "author" => CoreProperties?.Creator,
+            "keywords" => CoreProperties?.Keywords,
+            "description" or "comments" => CoreProperties?.Description,
+            "lastmodifiedby" => CoreProperties?.LastModifiedBy,
+            "revision" => CoreProperties?.Revision,
+            "created" => CoreProperties?.Created,
+            "modified" => CoreProperties?.Modified,
+            "category" => CoreProperties?.Category,
+            "contentstatus" or "status" => CoreProperties?.ContentStatus,
+
+            // Extended properties
+            "template" => ExtendedProperties?.Template,
+            "application" => ExtendedProperties?.Application,
+            "appversion" => ExtendedProperties?.AppVersion,
+            "company" => ExtendedProperties?.Company,
+            "manager" => ExtendedProperties?.Manager,
+            "pages" => ExtendedProperties?.Pages?.ToString(),
+            "words" => ExtendedProperties?.Words?.ToString(),
+            "characters" => ExtendedProperties?.Characters?.ToString(),
+            "characterswithspaces" => ExtendedProperties?.CharactersWithSpaces?.ToString(),
+            "lines" => ExtendedProperties?.Lines?.ToString(),
+            "paragraphs" => ExtendedProperties?.Paragraphs?.ToString(),
+            "totaltime" => ExtendedProperties?.TotalTime?.ToString(),
+
+            _ => (string?)null
+        };
+
+        if (builtInValue is not null)
+            return builtInValue;
+
+        // Fall back to custom properties (case-insensitive lookup)
+        EnsureCustomPropertiesParsed();
+        var customKey = _customProperties!.Keys.FirstOrDefault(k =>
+            string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
+        return customKey is not null ? _customProperties[customKey] : null;
+    }
+
+    /// <summary>
+    /// Sets a document property value by name (case-insensitive).
+    /// Unknown property names are stored as custom properties.
+    /// </summary>
+    /// <param name="propertyName">The property name.</param>
+    /// <param name="value">The value to set.</param>
+    public void SetProperty(string propertyName, string? value)
+    {
+        if (value is null)
+        {
+            RemoveProperty(propertyName);
+            return;
+        }
+
+        var lowerName = propertyName.ToLowerInvariant();
+
+        if (DocumentPropertyHelpers.IsCoreProperty(lowerName))
+        {
+            PackageData.CoreProperties ??= new CoreProperties();
+            SetCoreProperty(lowerName, value);
+        }
+        else if (DocumentPropertyHelpers.IsExtendedProperty(lowerName))
+        {
+            PackageData.ExtendedProperties ??= new ExtendedProperties();
+            SetExtendedProperty(lowerName, value);
+        }
+        else
+        {
+            // Store as custom property (preserve original casing for new properties)
+            EnsureCustomPropertiesParsed();
+            var existingKey = _customProperties!.Keys.FirstOrDefault(k =>
+                string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
+            if (existingKey is not null)
+                _customProperties[existingKey] = value;
+            else
+                _customProperties[propertyName] = value;
+        }
+    }
+
+    /// <summary>
+    /// Removes a document property by name (case-insensitive).
+    /// </summary>
+    /// <param name="propertyName">The property name to remove.</param>
+    /// <returns>True if the property was found and removed.</returns>
+    public bool RemoveProperty(string propertyName)
+    {
+        var lowerName = propertyName.ToLowerInvariant();
+
+        if (DocumentPropertyHelpers.IsCoreProperty(lowerName))
+        {
+            if (CoreProperties is null) return false;
+            return RemoveCoreProperty(lowerName);
+        }
+
+        if (DocumentPropertyHelpers.IsExtendedProperty(lowerName))
+        {
+            if (ExtendedProperties is null) return false;
+            return RemoveExtendedProperty(lowerName);
+        }
+
+        // Remove from custom properties
+        EnsureCustomPropertiesParsed();
+        var existingKey = _customProperties!.Keys.FirstOrDefault(k =>
+            string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
+        return existingKey is not null && _customProperties.Remove(existingKey);
+    }
+
+    /// <summary>
+    /// Checks if a property with the given name exists and has a value.
+    /// </summary>
+    /// <param name="propertyName">The property name (case-insensitive).</param>
+    /// <returns>True if the property exists and has a non-null value.</returns>
+    public bool HasProperty(string propertyName) => GetProperty(propertyName) is not null;
+
+    /// <summary>
+    /// Gets all properties (core, extended, and custom) that have values.
+    /// </summary>
+    /// <returns>Dictionary of property names and their values.</returns>
+    public Dictionary<string, string> GetAllProperties()
+    {
+        var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Add built-in properties
+        foreach (var name in BuiltInPropertyNames)
+        {
+            var value = GetProperty(name);
+            if (value is not null)
+                properties[name] = value;
+        }
+
+        // Add custom properties
+        foreach (var kvp in CustomProperties)
+        {
+            properties[kvp.Key] = kvp.Value;
+        }
+
+        return properties;
+    }
+
+    /// <summary>
+    /// Gets all built-in property names (core and extended).
+    /// </summary>
+    public static IReadOnlyList<string> BuiltInPropertyNames { get; } =
+    [
+        // Core properties
+        "Title", "Subject", "Creator", "Keywords", "Description",
+        "LastModifiedBy", "Revision", "Created", "Modified", "Category", "ContentStatus",
+        // Extended properties
+        "Template", "Application", "AppVersion", "Company", "Manager",
+        "Pages", "Words", "Characters", "CharactersWithSpaces", "Lines", "Paragraphs", "TotalTime"
+    ];
+
+    #endregion
+
+    #region Custom Properties XML Serialization
+
+    private void EnsureCustomPropertiesParsed()
+    {
+        if (_customPropertiesParsed) return;
+
+        _customProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _customPropertiesParsed = true;
+
+        if (string.IsNullOrEmpty(PackageData.CustomPropertiesXml)) return;
+
+        try
+        {
+            var doc = XDocument.Parse(PackageData.CustomPropertiesXml);
+
+            // Find all property elements regardless of namespace
+            // The element local name is "property" in Open XML custom properties
+            foreach (var prop in doc.Descendants().Where(e => e.Name.LocalName == "property"))
+            {
+                var name = prop.Attribute("name")?.Value;
+                if (name is not null)
+                {
+                    // Get the value from any child element (lpwstr, i4, bool, filetime, etc.)
+                    var valueElement = prop.Elements().FirstOrDefault();
+                    var value = valueElement?.Value ?? string.Empty;
+                    _customProperties[name] = value;
+                }
+            }
+        }
+        catch
+        {
+            // If parsing fails, start with empty dictionary
+        }
+    }
+
+    /// <summary>
+    /// Serializes the custom properties back to XML format for saving.
+    /// Called automatically by the writer.
+    /// </summary>
+    internal void SyncCustomPropertiesToXml()
+    {
+        if (!_customPropertiesParsed || _customProperties is null || _customProperties.Count == 0)
+        {
+            if (_customPropertiesParsed && (_customProperties is null || _customProperties.Count == 0))
+                PackageData.CustomPropertiesXml = null;
+            return;
+        }
+
+        XNamespace ns = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties";
+        XNamespace vt = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes";
+
+        var props = new XElement(ns + "Properties",
+            new XAttribute(XNamespace.Xmlns + "vt", vt));
+
+        var pid = 2; // Property IDs start at 2
+        foreach (var kvp in _customProperties)
+        {
+            var prop = new XElement(ns + "property",
+                new XAttribute("fmtid", "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"),
+                new XAttribute("pid", pid++),
+                new XAttribute("name", kvp.Key),
+                new XElement(vt + "lpwstr", kvp.Value));
+            props.Add(prop);
+        }
+
+        PackageData.CustomPropertiesXml = props.ToString();
+    }
+
+    #endregion
+
+    #region Private Property Setters/Removers
+
+    private void SetCoreProperty(string lowerName, string value)
+    {
+        switch (lowerName)
+        {
+            case "title": CoreProperties!.Title = value; break;
+            case "subject": CoreProperties!.Subject = value; break;
+            case "creator": case "author": CoreProperties!.Creator = value; break;
+            case "keywords": CoreProperties!.Keywords = value; break;
+            case "description": case "comments": CoreProperties!.Description = value; break;
+            case "lastmodifiedby": CoreProperties!.LastModifiedBy = value; break;
+            case "revision": CoreProperties!.Revision = value; break;
+            case "created": CoreProperties!.Created = value; break;
+            case "modified": CoreProperties!.Modified = value; break;
+            case "category": CoreProperties!.Category = value; break;
+            case "contentstatus": case "status": CoreProperties!.ContentStatus = value; break;
+        }
+    }
+
+    private void SetExtendedProperty(string lowerName, string value)
+    {
+        switch (lowerName)
+        {
+            case "template": ExtendedProperties!.Template = value; break;
+            case "application": ExtendedProperties!.Application = value; break;
+            case "appversion": ExtendedProperties!.AppVersion = value; break;
+            case "company": ExtendedProperties!.Company = value; break;
+            case "manager": ExtendedProperties!.Manager = value; break;
+            case "pages": ExtendedProperties!.Pages = int.TryParse(value, out var p) ? p : null; break;
+            case "words": ExtendedProperties!.Words = int.TryParse(value, out var w) ? w : null; break;
+            case "characters": ExtendedProperties!.Characters = int.TryParse(value, out var c) ? c : null; break;
+            case "characterswithspaces": ExtendedProperties!.CharactersWithSpaces = int.TryParse(value, out var cs) ? cs : null; break;
+            case "lines": ExtendedProperties!.Lines = int.TryParse(value, out var l) ? l : null; break;
+            case "paragraphs": ExtendedProperties!.Paragraphs = int.TryParse(value, out var pg) ? pg : null; break;
+            case "totaltime": ExtendedProperties!.TotalTime = int.TryParse(value, out var t) ? t : null; break;
+        }
+    }
+
+    private bool RemoveCoreProperty(string lowerName)
+    {
+        var hadValue = GetProperty(lowerName) is not null;
+        switch (lowerName)
+        {
+            case "title": CoreProperties!.Title = null; break;
+            case "subject": CoreProperties!.Subject = null; break;
+            case "creator": case "author": CoreProperties!.Creator = null; break;
+            case "keywords": CoreProperties!.Keywords = null; break;
+            case "description": case "comments": CoreProperties!.Description = null; break;
+            case "lastmodifiedby": CoreProperties!.LastModifiedBy = null; break;
+            case "revision": CoreProperties!.Revision = null; break;
+            case "created": CoreProperties!.Created = null; break;
+            case "modified": CoreProperties!.Modified = null; break;
+            case "category": CoreProperties!.Category = null; break;
+            case "contentstatus": case "status": CoreProperties!.ContentStatus = null; break;
+        }
+        return hadValue;
+    }
+
+    private bool RemoveExtendedProperty(string lowerName)
+    {
+        var hadValue = GetProperty(lowerName) is not null;
+        switch (lowerName)
+        {
+            case "template": ExtendedProperties!.Template = null; break;
+            case "application": ExtendedProperties!.Application = null; break;
+            case "appversion": ExtendedProperties!.AppVersion = null; break;
+            case "company": ExtendedProperties!.Company = null; break;
+            case "manager": ExtendedProperties!.Manager = null; break;
+            case "pages": ExtendedProperties!.Pages = null; break;
+            case "words": ExtendedProperties!.Words = null; break;
+            case "characters": ExtendedProperties!.Characters = null; break;
+            case "characterswithspaces": ExtendedProperties!.CharactersWithSpaces = null; break;
+            case "lines": ExtendedProperties!.Lines = null; break;
+            case "paragraphs": ExtendedProperties!.Paragraphs = null; break;
+            case "totaltime": ExtendedProperties!.TotalTime = null; break;
+        }
+        return hadValue;
+    }
+
+    #endregion
 
     #region Document Properties (Convenience Accessors)
 
@@ -135,7 +494,6 @@ public class WordDocument
 
     /// <summary>
     /// The styles XML content (styles.xml).
-    /// Contains all style definitions used in the document.
     /// </summary>
     public string? StylesXml
     {
@@ -145,7 +503,6 @@ public class WordDocument
 
     /// <summary>
     /// The theme XML content (theme/theme1.xml).
-    /// Contains theme colors, fonts, and effects.
     /// </summary>
     public string? ThemeXml
     {
@@ -155,7 +512,6 @@ public class WordDocument
 
     /// <summary>
     /// The font table XML content (fontTable.xml).
-    /// Contains font definitions and substitutions.
     /// </summary>
     public string? FontTableXml
     {
@@ -165,7 +521,6 @@ public class WordDocument
 
     /// <summary>
     /// The numbering definitions XML content (numbering.xml).
-    /// Contains list formatting definitions.
     /// </summary>
     public string? NumberingXml
     {
@@ -206,67 +561,12 @@ public class WordDocument
 
     #region Content Traversal
 
-    /// <summary>
-    /// Gets all nodes in the document tree (including the root).
-    /// </summary>
-    public IEnumerable<DocumentNode> GetAllNodes()
-    {
-        yield return Root;
-        foreach (var descendant in Root.GetDescendants())
-        {
-            yield return descendant;
-        }
-    }
-
-    /// <summary>
-    /// Gets all heading nodes in document order.
-    /// </summary>
-    public IEnumerable<DocumentNode> GetHeadings()
-    {
-        return GetAllNodes().Where(n => n.Type == ContentType.Heading);
-    }
-
-    /// <summary>
-    /// Gets all paragraph nodes in document order.
-    /// </summary>
-    public IEnumerable<DocumentNode> GetParagraphs()
-    {
-        return GetAllNodes().Where(n => n.Type == ContentType.Paragraph);
-    }
-
-    /// <summary>
-    /// Gets all table nodes in document order.
-    /// </summary>
-    public IEnumerable<DocumentNode> GetTables()
-    {
-        return GetAllNodes().Where(n => n.Type == ContentType.Table);
-    }
-
-    /// <summary>
-    /// Gets all content control nodes in document order.
-    /// </summary>
-    public IEnumerable<DocumentNode> GetContentControls()
-    {
-        return GetAllNodes().Where(n => n.IsContentControl);
-    }
-
-    /// <summary>
-    /// Gets all nodes that contain document property fields.
-    /// </summary>
-    public IEnumerable<DocumentNode> GetNodesWithDocumentPropertyFields()
-    {
-        return GetAllNodes().Where(n => n.HasDocumentPropertyFields);
-    }
-
     #endregion
 
     /// <summary>
     /// Returns a tree representation of the document structure.
     /// </summary>
-    public string ToTreeString()
-    {
-        return Root.ToTreeString();
-    }
+    public string ToTreeString() => Root.ToTreeString();
 
     /// <summary>
     /// Returns a string representation of this document.
@@ -274,7 +574,7 @@ public class WordDocument
     public override string ToString()
     {
         var title = Title ?? FileName ?? "Untitled";
-        var nodeCount = GetAllNodes().Count();
+        var nodeCount = Root.FindAll(_ => true).Count();
         return $"WordDocument: {title} ({nodeCount} nodes)";
     }
 }
