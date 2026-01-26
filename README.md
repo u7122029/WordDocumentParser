@@ -6,11 +6,13 @@ A .NET library for parsing Word documents (.docx) into a hierarchical tree struc
 
 - **Tree-based parsing**: Parses Word documents into a hierarchical structure organized by heading levels
 - **Round-trip fidelity**: Preserves all formatting, styles, document properties, and dynamic references when writing back
-- **Rich content support**: Handles paragraphs, headings, tables, images, lists, hyperlinks, and structured document tags
+- **Rich content support**: Handles paragraphs, headings, tables, images, lists, hyperlinks, and content controls
+- **Content Controls**: Full support for all Structured Document Tag (SDT) types including text, date, dropdown, checkbox, and document property controls
+- **Document Properties**: Easy access to core, extended, and custom properties with dictionary-style syntax
+- **DOCPROPERTY Fields**: Detects and preserves document property field codes with value resolution
 - **Full formatting capture**: Extracts paragraph, run, table, and image formatting properties
-- **Document properties**: Preserves core, extended, and custom document properties
-- **Dynamic references**: Maintains DOCPROPERTY fields, BIBLIOGRAPHY, CITATION, and other field codes
-- **Fluent API**: Extension methods for easy tree navigation and manipulation
+- **Table of Contents**: Preserves TOC and generates heading-based table of contents
+- **Fluent API**: Extension methods for easy tree navigation, querying, and manipulation
 
 ## Installation
 
@@ -49,24 +51,76 @@ using WordDocumentParser;
 
 // Parse a Word document
 using var parser = new WordDocumentTreeParser();
-var documentTree = parser.ParseFromFile("document.docx");
+var doc = parser.ParseFromFile("document.docx");
 
 // Display the tree structure
-Console.WriteLine(documentTree.ToTreeString());
+Console.WriteLine(doc.Root.ToTreeString());
+
+// Access document properties
+Console.WriteLine($"Title: {doc["Title"]}");
+Console.WriteLine($"Author: {doc["Author"]}");
+```
+
+### Working with Document Properties
+
+```csharp
+// Dictionary-style access (case-insensitive)
+doc["Title"] = "My Document";
+doc["Author"] = "John Doe";
+doc["Department"] = "Engineering";  // Creates custom property
+
+// Method-based access
+string? company = doc.GetProperty("Company");
+doc.SetProperty("Project", "WordParser");
+bool hasKeywords = doc.HasProperty("Keywords");
+doc.RemoveProperty("OldProperty");
+
+// Get all properties
+var allProps = doc.GetAllProperties();
+foreach (var (name, value) in allProps)
+{
+    Console.WriteLine($"{name}: {value}");
+}
 ```
 
 ### Writing a Document
 
 ```csharp
+using WordDocumentParser.Extensions;
+
 // Save a parsed document to a new file (preserves all formatting)
-documentTree.SaveToFile("output.docx");
+doc.SaveToFile("output.docx");
 
 // Or save to a stream
 using var stream = new MemoryStream();
-documentTree.SaveToStream(stream);
+doc.SaveToStream(stream);
 
 // Or get as byte array
-var bytes = documentTree.ToDocxBytes();
+var bytes = doc.ToDocxBytes();
+```
+
+### Working with Content Controls
+
+```csharp
+using WordDocumentParser.Extensions;
+
+// Find all content controls
+var controls = doc.GetAllContentControls();
+
+// Find by tag or alias
+var clientControl = doc.FindContentControlByTag("ClientName");
+var dateControl = doc.FindContentControlByAlias("Document Date");
+
+// Update content control values
+doc.SetContentControlValueByTag("ClientName", "ABC Corporation");
+doc.SetContentControlValueByAlias("ProjectCode", "PRJ-2024-001");
+
+// Get all tags in use
+var tags = doc.GetContentControlTags();
+
+// Remove content controls (keeps text content)
+doc.RemoveContentControlByTag("TemporaryField");
+doc.RemoveAllContentControls();  // Remove all, keep content
 ```
 
 ### Creating a Document from Scratch
@@ -88,8 +142,11 @@ var methods = new DocumentNode(ContentType.Heading, 1, "Methods");
 root.AddChild(methods);
 methods.AddChild(new DocumentNode(ContentType.Paragraph, "Description of methods..."));
 
-// Save the document
-root.SaveToFile("new_document.docx");
+// Create WordDocument and save
+var doc = new WordDocument(root);
+doc["Title"] = "My New Document";
+doc["Author"] = "Jane Smith";
+doc.SaveToFile("new_document.docx");
 ```
 
 ## Document Tree Structure
@@ -116,6 +173,29 @@ Document (root)
 
 ### Core Classes
 
+#### `WordDocument`
+
+The primary wrapper class representing a complete Word document.
+
+```csharp
+// Properties
+WordDocument doc = ...;
+DocumentNode root = doc.Root;                    // Root of content tree
+string fileName = doc.FileName;                  // Original file name
+DocumentPackageData package = doc.PackageData;  // Full package for round-trip
+
+// Document Properties (dictionary-style access)
+doc["Title"] = "New Title";
+string? author = doc["Author"];
+
+// Property methods
+doc.SetProperty("Company", "ACME Corp");
+string? value = doc.GetProperty("Keywords");
+bool exists = doc.HasProperty("Subject");
+doc.RemoveProperty("OldProp");
+var all = doc.GetAllProperties();
+```
+
 #### `WordDocumentTreeParser`
 
 Parses Word documents into a tree structure.
@@ -124,10 +204,10 @@ Parses Word documents into a tree structure.
 using var parser = new WordDocumentTreeParser();
 
 // Parse from file
-var tree = parser.ParseFromFile("document.docx");
+var doc = parser.ParseFromFile("document.docx");
 
 // Parse from stream
-var tree = parser.ParseFromStream(stream, "documentName");
+var doc = parser.ParseFromStream(stream, "documentName");
 ```
 
 #### `DocumentNode`
@@ -144,8 +224,8 @@ Represents a node in the document tree.
 | `Parent` | `DocumentNode?` | Parent node reference |
 | `Runs` | `List<FormattedRun>` | Formatted text runs with styling |
 | `ParagraphFormatting` | `ParagraphFormatting?` | Paragraph-level formatting |
+| `ContentControlProperties` | `ContentControlProperties?` | Content control metadata |
 | `OriginalXml` | `string?` | Original OpenXML for round-trip fidelity |
-| `PackageData` | `DocumentPackageData?` | Document package data (root node only) |
 | `Metadata` | `Dictionary<string, object>` | Additional metadata |
 
 #### `ContentType` Enum
@@ -153,142 +233,191 @@ Represents a node in the document tree.
 ```csharp
 public enum ContentType
 {
-    Document,      // Root document node
-    Heading,       // Heading (H1-H9)
-    Paragraph,     // Regular paragraph
-    Table,         // Table
-    Image,         // Image
-    List,          // List container
-    ListItem,      // List item
-    HyperlinkText, // Hyperlink text
-    TextRun        // Text run with formatting
+    Document,       // Root document node
+    Heading,        // Heading (H1-H9)
+    Paragraph,      // Regular paragraph
+    Table,          // Table
+    Image,          // Image
+    List,           // List container
+    ListItem,       // List item
+    HyperlinkText,  // Hyperlink text
+    TextRun,        // Text run with formatting
+    ContentControl  // Structured Document Tag (SDT)
 }
+```
+
+### Content Controls
+
+The library provides full support for Word content controls (Structured Document Tags).
+
+#### `ContentControlType` Enum
+
+```csharp
+public enum ContentControlType
+{
+    Unknown,
+    RichText,              // Rich text content
+    PlainText,             // Plain text only
+    Picture,               // Image placeholder
+    Date,                  // Date picker
+    DropDownList,          // Dropdown selection
+    ComboBox,              // Editable dropdown
+    Checkbox,              // Checkbox control
+    RepeatingSection,      // Repeating content
+    RepeatingSectionItem,
+    BuildingBlockGallery,  // Quick Parts gallery
+    Group,                 // Group container
+    Bibliography,          // Bibliography field
+    Citation,              // Citation field
+    Equation,              // Equation placeholder
+    DocumentProperty       // Linked to document property
+}
+```
+
+#### `ContentControlProperties`
+
+```csharp
+public class ContentControlProperties
+{
+    public int? Id { get; set; }           // Unique identifier
+    public string? Tag { get; set; }       // Developer tag
+    public string? Alias { get; set; }     // Display name/title
+    public ContentControlType Type { get; set; }
+    public string? Value { get; set; }     // Current content
+
+    // Lock settings
+    public bool LockContentControl { get; set; }  // Can't delete
+    public bool LockContents { get; set; }        // Can't edit
+
+    // Data binding (for document property controls)
+    public string? DataBindingXPath { get; set; }
+    public string? DataBindingStoreItemId { get; set; }
+
+    // Type-specific
+    public string? DateFormat { get; set; }
+    public List<ContentControlListItem> ListItems { get; set; }
+    public bool? IsChecked { get; set; }
+}
+```
+
+#### Content Control Extension Methods
+
+```csharp
+// Finding controls
+var all = doc.GetAllContentControls();
+var byType = doc.GetContentControlsByType(ContentControlType.Date);
+var byTag = doc.FindContentControlByTag("CustomerName");
+var byAlias = doc.FindContentControlByAlias("Invoice Date");
+var byId = doc.FindContentControlById(12345);
+
+// Getting metadata
+var tags = doc.GetContentControlTags();
+var props = doc.GetContentControlPropertiesByTag("FieldTag");
+
+// Modifying values
+doc.SetContentControlValueByTag("ClientName", "New Client");
+doc.SetContentControlValueByAlias("Date", "2024-01-15");
+
+// Removing controls (text content is preserved)
+doc.RemoveContentControlByTag("TempField");
+doc.RemoveContentControlByAlias("Draft Notice");
+doc.RemoveContentControl(12345);
+doc.RemoveAllContentControls();
 ```
 
 ### Extension Methods
 
-The `DocumentTreeExtensions` class provides fluent methods for tree navigation:
-
-#### Finding Nodes
+#### Tree Navigation
 
 ```csharp
-// Find all nodes matching a predicate
+// Finding nodes
 var matches = root.FindAll(n => n.Text.Contains("search term"));
-
-// Find first matching node
 var node = root.FindFirst(n => n.Type == ContentType.Table);
+var section = root.GetSection("Methods");  // Case-insensitive
 
-// Get section by heading text (case-insensitive partial match)
-var section = root.GetSection("Methods");
+// Navigation
+var path = node.GetPath();                 // Nodes from root
+var breadcrumb = node.GetHeadingPath();    // "Doc > H1 > H2"
+var siblings = node.GetSiblings();
+var next = node.GetNextSibling();
+var prev = node.GetPreviousSibling();
+var depth = node.GetDepth();
+var flat = root.Flatten();                 // All nodes as list
 ```
 
-#### Accessing Headings
+#### Tree Queries
 
 ```csharp
-// Get all headings
-var allHeadings = root.GetAllHeadings();
+// Headings
+var allHeadings = doc.GetAllHeadings();
+var h2Headings = doc.GetHeadingsAtLevel(2);
+var toc = doc.GetTableOfContents();  // (Level, Title, Node) tuples
 
-// Get headings at specific level
-var h2Headings = root.GetHeadingsAtLevel(2);
+// Content types
+var tables = doc.GetAllTables();
+var images = doc.GetAllImages();
 
-// Get table of contents
-var toc = root.GetTableOfContents();
-foreach (var (level, title, node) in toc)
-{
-    Console.WriteLine($"{"".PadLeft(level * 2)}{title}");
-}
+// Text extraction
+var text = section.GetAllText();
+
+// Statistics
+var counts = root.CountByType();
+Console.WriteLine($"Paragraphs: {counts[ContentType.Paragraph]}");
 ```
 
-#### Accessing Tables
+#### Working with Tables
 
 ```csharp
-// Get all tables
-var tables = root.GetAllTables();
+var tableNode = doc.GetAllTables().First();
+var table = tableNode.GetTableData();
 
-foreach (var tableNode in tables)
+// Dimensions
+Console.WriteLine($"Size: {table.RowCount}x{table.ColumnCount}");
+
+// Access as 2D array
+var array = table.ToTextArray();
+Console.WriteLine($"Cell [0,0]: {array[0, 0]}");
+
+// Access specific cell
+var cell = table.GetCell(1, 2);
+Console.WriteLine($"Content: {cell?.TextContent}");
+Console.WriteLine($"ColSpan: {cell?.ColSpan}");
+
+// Iterate rows and cells
+foreach (var row in table.Rows)
 {
-    var tableData = tableNode.GetTableData();
-    if (tableData != null)
+    foreach (var c in row.Cells)
     {
-        // Get dimensions
-        Console.WriteLine($"Table: {tableData.RowCount}x{tableData.ColumnCount}");
-
-        // Access as 2D array
-        var array = tableData.ToTextArray();
-        Console.WriteLine($"Cell [0,0]: {array[0, 0]}");
-
-        // Access specific cell
-        var cell = tableData.GetCell(0, 1);
-        Console.WriteLine($"Cell content: {cell?.TextContent}");
+        Console.WriteLine($"[{c.RowIndex},{c.ColumnIndex}]: {c.TextContent}");
     }
 }
 ```
 
-#### Accessing Images
+#### Working with Images
 
 ```csharp
-// Get all images
-var images = root.GetAllImages();
-
-foreach (var imageNode in images)
+foreach (var imageNode in doc.GetAllImages())
 {
-    var imageData = imageNode.GetImageData();
-    if (imageData != null)
+    var img = imageNode.GetImageData();
+    if (img != null)
     {
-        Console.WriteLine($"Image: {imageData.Name}");
-        Console.WriteLine($"Size: {imageData.WidthInches:F1}\" x {imageData.HeightInches:F1}\"");
-        Console.WriteLine($"Type: {imageData.ContentType}");
+        Console.WriteLine($"Name: {img.Name}");
+        Console.WriteLine($"Size: {img.WidthInches:F1}\" x {img.HeightInches:F1}\"");
+        Console.WriteLine($"Type: {img.ContentType}");
+        Console.WriteLine($"Alt: {img.AltText}");
 
-        // Save image to file
-        if (imageData.Data != null)
+        // Save to file
+        if (img.Data != null)
         {
-            File.WriteAllBytes($"{imageData.Name}.png", imageData.Data);
+            File.WriteAllBytes($"extracted_{img.Name}", img.Data);
         }
     }
 }
 ```
 
-#### Navigation
-
-```csharp
-// Get text content under a node
-var text = section.GetAllText();
-
-// Get breadcrumb path
-var path = node.GetHeadingPath(); // e.g., "Document > Introduction > Background"
-
-// Get path as node list
-var pathNodes = node.GetPath();
-
-// Navigate siblings
-var nextSibling = node.GetNextSibling();
-var prevSibling = node.GetPreviousSibling();
-var allSiblings = node.GetSiblings();
-
-// Get all descendants
-var descendants = root.GetDescendants();
-
-// Get node depth
-var depth = node.GetDepth();
-```
-
-#### Statistics
-
-```csharp
-// Count nodes by type
-var counts = root.CountByType();
-Console.WriteLine($"Paragraphs: {counts[ContentType.Paragraph]}");
-Console.WriteLine($"Tables: {counts[ContentType.Table]}");
-
-// Flatten tree to list
-var allNodes = root.Flatten();
-```
-
 ### Formatting Models
 
-#### `RunFormatting`
-
-Text run formatting properties:
+#### `RunFormatting` (Text-level)
 
 ```csharp
 public class RunFormatting
@@ -296,109 +425,221 @@ public class RunFormatting
     public bool Bold { get; set; }
     public bool Italic { get; set; }
     public bool Underline { get; set; }
-    public string? UnderlineStyle { get; set; }  // Single, Double, Wave, etc.
+    public string? UnderlineStyle { get; set; }  // Single, Double, Wave
     public bool Strike { get; set; }
     public bool DoubleStrike { get; set; }
     public string? FontFamily { get; set; }
-    public string? FontSize { get; set; }        // In half-points (e.g., "24" = 12pt)
-    public string? Color { get; set; }           // Hex color without #
-    public string? Highlight { get; set; }       // Highlight color name
+    public string? FontSize { get; set; }        // Half-points ("24" = 12pt)
+    public string? Color { get; set; }           // Hex without #
+    public string? Highlight { get; set; }
     public bool Superscript { get; set; }
     public bool Subscript { get; set; }
     public bool SmallCaps { get; set; }
     public bool AllCaps { get; set; }
-    public string? StyleId { get; set; }         // Character style reference
+    public string? StyleId { get; set; }
 }
 ```
 
 #### `ParagraphFormatting`
-
-Paragraph formatting properties:
 
 ```csharp
 public class ParagraphFormatting
 {
     public string? StyleId { get; set; }
     public string? Alignment { get; set; }       // Left, Center, Right, Both
-    public string? IndentLeft { get; set; }      // In twips
+    public string? IndentLeft { get; set; }      // Twips
     public string? IndentRight { get; set; }
     public string? IndentFirstLine { get; set; }
-    public string? SpacingBefore { get; set; }   // In twips
+    public string? SpacingBefore { get; set; }
     public string? SpacingAfter { get; set; }
     public string? LineSpacing { get; set; }
     public bool KeepNext { get; set; }
     public bool KeepLines { get; set; }
     public bool PageBreakBefore { get; set; }
-    // ... and more
+    public int? NumberingId { get; set; }
+    public int? NumberingLevel { get; set; }
 }
 ```
 
-#### `TableData`, `TableRow`, `TableCell`
-
-Table structure with formatting:
+#### `TableFormatting`
 
 ```csharp
-var tableData = tableNode.GetTableData();
-
-// Access rows
-foreach (var row in tableData.Rows)
+public class TableFormatting
 {
-    Console.WriteLine($"Row {row.RowIndex}, IsHeader: {row.IsHeader}");
-
-    foreach (var cell in row.Cells)
-    {
-        Console.WriteLine($"  Cell [{cell.RowIndex},{cell.ColumnIndex}]: {cell.TextContent}");
-        Console.WriteLine($"  ColSpan: {cell.ColSpan}, RowSpan: {cell.RowSpan}");
-    }
+    public string? Width { get; set; }
+    public string? WidthType { get; set; }       // Pct, Dxa, Auto
+    public string? Alignment { get; set; }
+    public BorderFormatting? TopBorder { get; set; }
+    public BorderFormatting? BottomBorder { get; set; }
+    public BorderFormatting? LeftBorder { get; set; }
+    public BorderFormatting? RightBorder { get; set; }
+    public BorderFormatting? InsideHorizontalBorder { get; set; }
+    public BorderFormatting? InsideVerticalBorder { get; set; }
+    public List<string>? GridColumnWidths { get; set; }
 }
 ```
 
-#### `ImageData`
+## Document Properties
 
-Image data with dimensions and positioning:
+The library provides comprehensive access to all three types of Word document properties:
+
+### Core Properties
+
+Standard document metadata:
+- Title, Subject, Creator/Author, Keywords, Description
+- LastModifiedBy, Revision, Category, ContentStatus
+- Created, Modified (dates)
+
+### Extended Properties
+
+Application-specific metadata:
+- Template, Application, AppVersion
+- Company, Manager
+- Pages, Words, Characters, Lines, Paragraphs
+
+### Custom Properties
+
+User-defined key-value pairs that can store any additional metadata.
 
 ```csharp
-var imageData = imageNode.GetImageData();
+// All property types accessible uniformly
+doc["Title"] = "Annual Report";           // Core
+doc["Company"] = "ACME Corporation";      // Extended
+doc["ProjectCode"] = "PRJ-2024-001";      // Custom (auto-created)
+doc["Confidential"] = "Yes";              // Custom
 
-// Dimensions
-double widthInches = imageData.WidthInches;
-double heightInches = imageData.HeightInches;
-long widthEmu = imageData.WidthEmu;   // For precise round-trip
+// Check property existence
+if (doc.HasProperty("Department"))
+{
+    Console.WriteLine(doc["Department"]);
+}
 
-// Image data
-byte[] data = imageData.Data;
-string contentType = imageData.ContentType;
-string altText = imageData.AltText;
+// Remove property
+doc.RemoveProperty("OldField");
 
-// Positioning
-var formatting = imageData.Formatting;
-bool isInline = formatting.IsInline;
-string wrapType = formatting.WrapType;  // None, Square, Tight, etc.
+// List all
+foreach (var (name, value) in doc.GetAllProperties())
+{
+    Console.WriteLine($"{name}: {value}");
+}
 ```
 
 ## Project Structure
 
 ```
 WordDocumentParser/
-├── WordDocumentParser.sln           # Solution file
-├── README.md                        # This file
+├── WordDocumentParser.sln
+├── README.md
 │
-├── WordDocumentParser/              # Core library (class library)
-│   ├── WordDocumentParser.csproj
-│   ├── DocumentNode.cs              # Document tree node
-│   ├── DocumentPackageData.cs       # Package data for round-trip
-│   ├── DocumentTreeExtensions.cs    # Extension methods
-│   ├── FormattingModels.cs          # Formatting classes
-│   ├── TableAndImageModels.cs       # Table and image models
-│   ├── WordDocumentTreeParser.cs    # Document parser
-│   └── WordDocumentTreeWriter.cs    # Document writer
+├── WordDocumentParser/                    # Core library
+│   ├── Core/
+│   │   ├── IDocumentParser.cs
+│   │   ├── IDocumentWriter.cs
+│   │   └── ContentType.cs
+│   ├── Models/
+│   │   ├── Formatting/                   # RunFormatting, ParagraphFormatting, etc.
+│   │   ├── ContentControls/              # ContentControlProperties, types
+│   │   ├── Tables/                       # TableData, TableRow, TableCell
+│   │   ├── Images/                       # ImageData, ImageFormatting
+│   │   └── Package/                      # CoreProperties, ExtendedProperties, etc.
+│   ├── Extensions/
+│   │   ├── TreeNavigationExtensions.cs
+│   │   ├── TreeQueryExtensions.cs
+│   │   ├── ContentControlExtensions.cs
+│   │   ├── DocumentPropertyExtensions.cs
+│   │   └── SerializationExtensions.cs
+│   ├── Parsing/
+│   │   ├── ParsingContext.cs
+│   │   └── Extractors/
+│   ├── WordDocument.cs                   # Main document wrapper
+│   ├── DocumentNode.cs                   # Tree node
+│   ├── WordDocumentTreeParser.cs         # Parser
+│   └── WordDocumentTreeWriter.cs         # Writer
 │
-└── WordDocumentParser.Demo/         # Demo application (console app)
-    ├── WordDocumentParser.Demo.csproj
-    ├── Program.cs                   # Demo entry point
-    ├── DocumentComparison.cs        # Document comparison utilities
-    ├── DocumentValidator.cs         # Document validation utilities
-    └── TableHelper.cs               # Table creation helpers
+└── WordDocumentParser.Demo/              # Demo application
+    ├── Program.cs
+    └── Features/
+        ├── Parsing/
+        ├── ContentControls/
+        ├── DocumentProperties/
+        ├── DocumentCreation/
+        └── RoundTrip/
+```
+
+## Round-Trip Fidelity
+
+The library preserves the following when parsing and writing back:
+
+- **Styles**: All paragraph and character styles
+- **Formatting**: Bold, italic, underline, fonts, colors, spacing, borders, shading
+- **Document Properties**: Core, extended, and custom properties
+- **Content Controls**: All SDT types with properties and data binding
+- **Dynamic References**: DOCPROPERTY fields, TOC, BIBLIOGRAPHY, CITATION
+- **Structure**: Headers, footers, sections, page layout
+- **Media**: Images with dimensions, alt text, and positioning
+- **Tables**: Cell merging, borders, shading, column widths, nested content
+- **Numbering**: List definitions and formatting
+- **Hyperlinks**: External URLs and internal anchors
+- **Glossary**: Building blocks, Quick Parts, document property fields
+
+## Example: Complete Workflow
+
+```csharp
+using WordDocumentParser;
+using WordDocumentParser.Extensions;
+
+// 1. Parse an existing document
+using var parser = new WordDocumentTreeParser();
+var doc = parser.ParseFromFile("template.docx");
+
+// 2. Display structure
+Console.WriteLine(doc.Root.ToTreeString());
+
+// 3. Update document properties
+doc["Title"] = "Quarterly Report Q4 2024";
+doc["Author"] = "Finance Department";
+doc["Department"] = "Finance";
+doc["ReportDate"] = DateTime.Now.ToShortDateString();
+
+// 4. Update content controls
+doc.SetContentControlValueByTag("CompanyName", "ACME Corporation");
+doc.SetContentControlValueByTag("ReportPeriod", "Q4 2024");
+doc.SetContentControlValueByTag("PreparedBy", "John Smith");
+
+// 5. Analyze content
+var toc = doc.GetTableOfContents();
+Console.WriteLine("\nTable of Contents:");
+foreach (var (level, title, _) in toc)
+{
+    Console.WriteLine($"{"".PadLeft(level * 2)}{title}");
+}
+
+// 6. Work with tables
+foreach (var table in doc.GetAllTables())
+{
+    var data = table.GetTableData();
+    Console.WriteLine($"\nTable: {data.RowCount}x{data.ColumnCount}");
+    Console.WriteLine($"Location: {table.GetHeadingPath()}");
+}
+
+// 7. Extract images
+foreach (var img in doc.GetAllImages())
+{
+    var data = img.GetImageData();
+    Console.WriteLine($"\nImage: {data?.Name} ({data?.ContentType})");
+}
+
+// 8. Get statistics
+var counts = doc.Root.CountByType();
+Console.WriteLine($"\nDocument Statistics:");
+Console.WriteLine($"  Headings: {counts.GetValueOrDefault(ContentType.Heading)}");
+Console.WriteLine($"  Paragraphs: {counts.GetValueOrDefault(ContentType.Paragraph)}");
+Console.WriteLine($"  Tables: {counts.GetValueOrDefault(ContentType.Table)}");
+Console.WriteLine($"  Images: {counts.GetValueOrDefault(ContentType.Image)}");
+
+// 9. Save with full fidelity
+doc.SaveToFile("output.docx");
+Console.WriteLine("\nDocument saved successfully!");
 ```
 
 ## Building
@@ -412,60 +653,6 @@ dotnet build WordDocumentParser/WordDocumentParser.csproj
 
 # Run the demo
 dotnet run --project WordDocumentParser.Demo
-```
-
-## Round-Trip Fidelity
-
-The library preserves the following when parsing and writing back:
-
-- **Styles**: All paragraph and character styles
-- **Formatting**: Bold, italic, underline, fonts, colors, spacing, etc.
-- **Document Properties**: Title, author, subject, keywords, custom properties
-- **Dynamic References**: DOCPROPERTY fields, BIBLIOGRAPHY, CITATION, TOC
-- **Structure**: Headers, footers, sections, page layout
-- **Media**: Images with original dimensions and positioning
-- **Tables**: Cell merging, borders, shading, column widths
-- **Numbering**: List definitions and formatting
-- **Glossary**: Building blocks and Quick Parts
-
-## Example: Complete Workflow
-
-```csharp
-using WordDocumentParser;
-
-// 1. Parse an existing document
-using var parser = new WordDocumentTreeParser();
-var doc = parser.ParseFromFile("input.docx");
-
-// 2. Analyze the structure
-Console.WriteLine("Document Structure:");
-Console.WriteLine(doc.ToTreeString());
-
-var stats = doc.CountByType();
-Console.WriteLine($"\nStatistics:");
-foreach (var (type, count) in stats)
-{
-    Console.WriteLine($"  {type}: {count}");
-}
-
-// 3. Find specific content
-var methodsSection = doc.GetSection("Methods");
-if (methodsSection != null)
-{
-    Console.WriteLine($"\nMethods section text:");
-    Console.WriteLine(methodsSection.GetAllText());
-}
-
-// 4. Work with tables
-foreach (var table in doc.GetAllTables())
-{
-    var data = table.GetTableData();
-    Console.WriteLine($"\nTable at: {table.GetHeadingPath()}");
-    Console.WriteLine($"Dimensions: {data.RowCount}x{data.ColumnCount}");
-}
-
-// 5. Save with full fidelity
-doc.SaveToFile("output.docx");
 ```
 
 ## License
