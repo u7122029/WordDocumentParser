@@ -17,11 +17,11 @@ class Program
     static void Main(string[] args)
     {
         // Example usage with a file path
-        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\content_control_example.docx";
+        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\FDE EM SD v3.docx";
 
         if (File.Exists(filePath))
         {
-            DocumentStructureDemo.Run(filePath);
+            // DocumentStructureDemo.Run(filePath);
 
             // // Demo: Content Controls - Read and Modify
             // Console.WriteLine("\n\nContent Control Demo:");
@@ -34,14 +34,14 @@ class Program
             // ContentControlRemovalDemo.Run(filePath);
 
             // Demo: Add, change, and remove a document property
-            Console.WriteLine("\n\nDocument Property Demo:");
-            Console.WriteLine("=======================");
-            DocumentPropertyDemo.Run(filePath);
+            // Console.WriteLine("\n\nDocument Property Demo:");
+            // Console.WriteLine("=======================");
+            // DocumentPropertyDemo.Run(filePath);
 
             // Demo: Write the parsed document back to a new file
-            // Console.WriteLine("\n\nWriting Document Demo:");
-            // Console.WriteLine("======================");
-            // RoundTripDemo.Run(filePath);
+            Console.WriteLine("\n\nWriting Document Demo:");
+            Console.WriteLine("======================");
+            RoundTripDemo.Run(filePath);
         }
         else
         {

@@ -407,23 +407,9 @@ public class WordDocumentTreeParser : IDocumentParser
         var text = string.Concat(runs.Select(r => r.IsTab ? "\t" : r.IsBreak ? " " : r.Text)).Trim();
         var headingLevel = GetHeadingLevel(para);
 
-        // Check for complex content that should be preserved exactly
-        var hasComplexContent = para.Descendants<AlternateContent>().Any() ||
-                                para.OuterXml.Contains("wpc:") ||
-                                para.OuterXml.Contains("v:group") ||
-                                para.OuterXml.Contains("v:shape");
-
-        // Check for section properties (section breaks) that must be preserved
-        var hasSectionProperties = para.ParagraphProperties?.SectionProperties is not null;
-
-        // Check for field characters (TOC, cross-references, page numbers, etc.)
-        var hasFieldCharacters = para.Descendants<FieldChar>().Any() ||
-                                 para.Descendants<FieldCode>().Any();
-
-        // Skip empty paragraphs (but keep empty headings, complex content, section breaks, and field characters)
-        if (string.IsNullOrWhiteSpace(text) && headingLevel == 0 && runs.Count == 0 &&
-            !hasComplexContent && !hasSectionProperties && !hasFieldCharacters)
-            return null;
+        // For round-trip fidelity, preserve ALL paragraphs including empty ones.
+        // Empty paragraphs serve important purposes: spacing, formatting, structure.
+        // We store OriginalXml for every paragraph to ensure exact reproduction.
 
         DocumentNode node;
 
@@ -932,8 +918,8 @@ public class WordDocumentTreeParser : IDocumentParser
         // Set Text for the container
         containerNode.Text = ccProperties?.Value ?? "";
 
-        // Return the container if it has children, otherwise null
-        return containerNode.Children.Count > 0 ? containerNode : null;
+        // Always return the container for round-trip fidelity - even empty SDT blocks should be preserved
+        return containerNode;
     }
 
     /// <summary>

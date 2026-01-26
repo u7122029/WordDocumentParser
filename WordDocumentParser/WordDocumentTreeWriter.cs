@@ -498,6 +498,79 @@ public class WordDocumentTreeWriter : IDocumentWriter
         // First clean problematic attributes
         var result = CleanXmlAttributes(xml);
 
+        // Update relationship IDs
+        result = UpdateRelationshipIds(result);
+
+        return result;
+    }
+
+    /// <summary>
+    /// Updates relationship IDs in XML content with minimal cleaning.
+    /// Removes only tracking attributes (paraId, textId, rsid) that cause validation errors
+    /// but preserves all formatting elements for exact round-trip fidelity.
+    /// </summary>
+    private string UpdateRelationshipsOnly(string xml)
+    {
+        // Clean only tracking attributes that cause validation errors, preserve formatting
+        var result = CleanTrackingAttributesOnly(xml);
+
+        // Update relationship IDs
+        return UpdateRelationshipIds(result);
+    }
+
+    /// <summary>
+    /// Cleans only tracking/extension attributes and elements that cause validation errors.
+    /// Removes Word 2010+ extension namespace content while preserving core formatting.
+    /// </summary>
+    private static string CleanTrackingAttributesOnly(string xml)
+    {
+        var result = xml;
+
+        // Remove ALL w14: prefixed attributes and elements
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w14:[a-zA-Z0-9]+=""[^""]*""", "");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"<w14:[^>]*/\s*>", ""); // self-closing elements
+        result = RemoveXmlElements(result, "w14:");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w14=""[^""]*""", "");
+
+        // Remove wp14: prefixed attributes and elements (Word 2010 drawing extensions)
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+wp14:[a-zA-Z0-9]+=""[^""]*""", "");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"<wp14:[^>]*/\s*>", "");
+        result = RemoveXmlElements(result, "wp14:");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:wp14=""[^""]*""", "");
+
+        // Remove w15: prefixed attributes and elements (Word 2013 extensions)
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w15:[a-zA-Z0-9]+=""[^""]*""", "");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"<w15:[^>]*/\s*>", "");
+        result = RemoveXmlElements(result, "w15:");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w15=""[^""]*""", "");
+
+        // Remove w16*: prefixed attributes and elements (Word 2016+ extensions)
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w16[a-z]*:[a-zA-Z0-9]+=""[^""]*""", "");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"<w16[a-z]*:[^>]*/\s*>", "");
+        result = RemoveXmlElements(result, "w16se:");
+        result = RemoveXmlElements(result, "w16cid:");
+        result = RemoveXmlElements(result, "w16cex:");
+        result = RemoveXmlElements(result, "w16sdtdh:");
+        result = RemoveXmlElements(result, "w16:");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+xmlns:w16[a-z]*=""[^""]*""", "");
+
+        // Remove rsid attributes (revision save IDs - not needed for display)
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:rsid[A-Za-z]*=""[^""]*""", "");
+
+        // Remove w:start and w:end attributes (Word 2010 RTL - causes validation errors)
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:start=""[^""]*""", "");
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:end=""[^""]*""", "");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Updates all relationship IDs in the XML string
+    /// </summary>
+    private string UpdateRelationshipIds(string xml)
+    {
+        var result = xml;
+
         // Update image relationship IDs
         foreach (var kvp in _imageRelationshipMapping)
         {
@@ -805,6 +878,10 @@ public class WordDocumentTreeWriter : IDocumentWriter
             case ContentType.TextRun:
                 WriteParagraph(node);
                 break;
+
+            case ContentType.ContentControl:
+                WriteSdtBlock(node);
+                break;
         }
     }
 
@@ -829,18 +906,15 @@ public class WordDocumentTreeWriter : IDocumentWriter
             if (updatedXml.TrimStart().StartsWith("<w:sdt"))
             {
                 var sdtBlock = new SdtBlock(updatedXml);
-
-                // Update the SDT content if the node has been modified
-                UpdateSdtBlockContent(sdtBlock, node);
-
+                // Don't call UpdateSdtBlockContent - OriginalXml already has correct content
+                // Modifying it could corrupt field codes and complex content
                 FixIndentationAttributes(sdtBlock);
                 _body!.Append(sdtBlock);
             }
             else
             {
-                // Update paragraph with inline SDT content if present
                 var paragraph = new Paragraph(updatedXml);
-                UpdateParagraphSdtContent(paragraph, node);
+                // Don't call UpdateParagraphSdtContent - OriginalXml already has correct content
                 FixIndentationAttributes(paragraph);
                 _body!.Append(paragraph);
             }
@@ -908,18 +982,15 @@ public class WordDocumentTreeWriter : IDocumentWriter
             if (updatedXml.TrimStart().StartsWith("<w:sdt"))
             {
                 var sdtBlock = new SdtBlock(updatedXml);
-
-                // Update the SDT content if the node has been modified
-                UpdateSdtBlockContent(sdtBlock, node);
-
+                // Don't call UpdateSdtBlockContent - OriginalXml already has correct content
+                // Modifying it could corrupt field codes and complex content
                 FixIndentationAttributes(sdtBlock);
                 _body!.Append(sdtBlock);
             }
             else
             {
-                // Update paragraph with inline SDT content if present
                 var paragraph = new Paragraph(updatedXml);
-                UpdateParagraphSdtContent(paragraph, node);
+                // Don't call UpdateParagraphSdtContent - OriginalXml already has correct content
                 FixIndentationAttributes(paragraph);
                 _body!.Append(paragraph);
             }
@@ -980,11 +1051,25 @@ public class WordDocumentTreeWriter : IDocumentWriter
     {
         if (!string.IsNullOrEmpty(node.OriginalXml))
         {
-            var updatedXml = UpdateImageRelationships(node.OriginalXml);
+            // Use UpdateRelationshipsOnly to preserve all formatting (including tables inside SDT blocks)
+            var updatedXml = UpdateRelationshipsOnly(node.OriginalXml);
             var sdtBlock = new SdtBlock(updatedXml);
 
-            // Update the SDT content if the node has been modified
-            UpdateSdtBlockContent(sdtBlock, node);
+            // Only update SDT content for simple content controls that have been explicitly modified.
+            // Do NOT update complex structures like TOC, tables, etc. - they should use OriginalXml exactly.
+            // Check if this is a simple content control (single paragraph with content control properties)
+            // and not a complex structure (multiple children, or types like TOC/Bibliography)
+            var isSimpleContentControl = node.ContentControlProperties != null &&
+                                          node.Children.Count <= 1 &&
+                                          node.ContentControlProperties.Type != Models.ContentControls.ContentControlType.Unknown &&
+                                          node.ContentControlProperties.Type != Models.ContentControls.ContentControlType.Group &&
+                                          node.ContentControlProperties.Type != Models.ContentControls.ContentControlType.Bibliography &&
+                                          !node.Metadata.ContainsKey("IsSdtBlock");
+
+            if (isSimpleContentControl)
+            {
+                UpdateSdtBlockContent(sdtBlock, node);
+            }
 
             FixIndentationAttributes(sdtBlock);
             _body!.Append(sdtBlock);
@@ -1637,11 +1722,12 @@ public class WordDocumentTreeWriter : IDocumentWriter
         // Use original XML if available for exact round-trip
         if (!string.IsNullOrEmpty(node.OriginalXml))
         {
-            var updatedXml = UpdateImageRelationships(node.OriginalXml);
+            // Use UpdateRelationshipsOnly to preserve all table formatting (w14/w15/w16 elements)
+            var updatedXml = UpdateRelationshipsOnly(node.OriginalXml);
             var originalTable = new Table(updatedXml);
             FixIndentationAttributes(originalTable);
             _body!.Append(originalTable);
-            _body.Append(new Paragraph()); // spacing after table
+            // Don't add extra paragraph - preserve original document structure
             return;
         }
 
