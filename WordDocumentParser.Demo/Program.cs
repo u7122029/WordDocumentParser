@@ -2,7 +2,10 @@ using System;
 using System.IO;
 using System.Linq;
 using WordDocumentParser;
-using WordDocumentParser.FormattingModels;
+using WordDocumentParser.Core;
+using WordDocumentParser.Extensions;
+using WordDocumentParser.Models.ContentControls;
+using WordDocumentParser.Models.Formatting;
 
 namespace WordDocumentParser.Demo;
 

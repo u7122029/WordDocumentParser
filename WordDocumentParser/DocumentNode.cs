@@ -1,34 +1,32 @@
-using WordDocumentParser.FormattingModels;
+using WordDocumentParser.Core;
+using WordDocumentParser.Models.ContentControls;
+using WordDocumentParser.Models.Formatting;
+using WordDocumentParser.Models.Package;
 
 namespace WordDocumentParser;
 
 /// <summary>
-/// Represents the type of content in a document node
-/// </summary>
-public enum ContentType
-{
-    Document,
-    Heading,
-    Paragraph,
-    Table,
-    Image,
-    List,
-    ListItem,
-    HyperlinkText,
-    TextRun,
-    ContentControl
-}
-
-/// <summary>
-/// Represents a node in the document tree structure
+/// Represents a node in the document tree structure.
+/// Nodes form a hierarchy based on heading levels, with content nested under headings.
 /// </summary>
 public class DocumentNode(ContentType type)
 {
+    /// <summary>Unique identifier for this node</summary>
     public string Id { get; set; } = Guid.NewGuid().ToString();
+
+    /// <summary>The content type of this node (Paragraph, Heading, Table, etc.)</summary>
     public ContentType Type { get; set; } = type;
-    public int HeadingLevel { get; set; } // 0 for non-headings, 1-9 for H1-H9
+
+    /// <summary>Heading level (1-9) or 0 for non-headings</summary>
+    public int HeadingLevel { get; set; }
+
+    /// <summary>Plain text content of this node</summary>
     public string Text { get; set; } = string.Empty;
+
+    /// <summary>Child nodes in document order</summary>
     public List<DocumentNode> Children { get; set; } = [];
+
+    /// <summary>Parent node in the tree hierarchy</summary>
     public DocumentNode? Parent { get; set; }
 
     /// <summary>
@@ -49,7 +47,7 @@ public class DocumentNode(ContentType type)
     /// <summary>
     /// Original document package data for round-trip fidelity (only set on root Document node)
     /// </summary>
-    public DocumentPackageData.DocumentPackageData? PackageData { get; set; }
+    public DocumentPackageData? PackageData { get; set; }
 
     /// <summary>
     /// Original OpenXML content for exact round-trip (stores full paragraph/table XML)
@@ -200,8 +198,10 @@ public class DocumentNode(ContentType type)
     /// </summary>
     public bool HasDocumentPropertyFields => Runs.Any(r => r.IsDocumentPropertyField);
 
+    /// <summary>Creates a node with the specified type and text content.</summary>
     public DocumentNode(ContentType type, string text) : this(type) => Text = text;
 
+    /// <summary>Creates a heading node with the specified level and text.</summary>
     public DocumentNode(ContentType type, int headingLevel, string text) : this(type, text) => HeadingLevel = headingLevel;
 
     /// <summary>
@@ -261,6 +261,7 @@ public class DocumentNode(ContentType type)
         return result;
     }
 
+    /// <summary>Returns a short string representation of this node.</summary>
     public override string ToString()
     {
         var typeLabel = Type == ContentType.Heading ? $"Heading{HeadingLevel}" : Type.ToString();

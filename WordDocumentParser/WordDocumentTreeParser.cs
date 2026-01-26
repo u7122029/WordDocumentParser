@@ -1,12 +1,18 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using WordDocumentParser.DocumentPackageData;
-using WordDocumentParser.FormattingModels;
+using WordDocumentParser.Core;
+using WordDocumentParser.Models.ContentControls;
+using WordDocumentParser.Models.Formatting;
+using WordDocumentParser.Models.Images;
+using WordDocumentParser.Models.Package;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
 using WpTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
 using WpTableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
+using TableData = WordDocumentParser.Models.Tables.TableData;
+using TableRow = WordDocumentParser.Models.Tables.TableRow;
+using TableCell = WordDocumentParser.Models.Tables.TableCell;
 
 namespace WordDocumentParser;
 
@@ -14,7 +20,7 @@ namespace WordDocumentParser;
 /// Parses Word documents and builds a hierarchical tree structure based on headings.
 /// Captures full formatting and document package data for round-trip fidelity.
 /// </summary>
-public class WordDocumentTreeParser : IDisposable
+public class WordDocumentTreeParser : IDocumentParser
 {
     private WordprocessingDocument? _document;
     private MainDocumentPart? _mainPart;
@@ -67,9 +73,9 @@ public class WordDocumentTreeParser : IDisposable
     /// <summary>
     /// Extracts all document package data for round-trip preservation
     /// </summary>
-    private DocumentPackageData.DocumentPackageData ExtractPackageData()
+    private DocumentPackageData ExtractPackageData()
     {
-        var packageData = new DocumentPackageData.DocumentPackageData();
+        var packageData = new DocumentPackageData();
 
         // Store original document XML
         if (_mainPart?.Document is not null)
@@ -1762,6 +1768,7 @@ public class WordDocumentTreeParser : IDisposable
         return DocumentPropertyType.Custom;
     }
 
+    /// <summary>Releases resources used by the parser.</summary>
     public void Dispose()
     {
         _document?.Dispose();
