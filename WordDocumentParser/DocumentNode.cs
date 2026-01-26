@@ -1,7 +1,6 @@
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.ContentControls;
 using WordDocumentParser.Models.Formatting;
-using WordDocumentParser.Models.Package;
 
 namespace WordDocumentParser;
 
@@ -43,11 +42,6 @@ public class DocumentNode(ContentType type)
     /// Paragraph-level formatting
     /// </summary>
     public ParagraphFormatting? ParagraphFormatting { get; set; }
-
-    /// <summary>
-    /// Original document package data for round-trip fidelity (only set on root Document node)
-    /// </summary>
-    public DocumentPackageData? PackageData { get; set; }
 
     /// <summary>
     /// Original OpenXML content for exact round-trip (stores full paragraph/table XML)

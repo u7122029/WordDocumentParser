@@ -12,10 +12,24 @@ public static class TreeQueryExtensions
     /// <summary>
     /// Gets all headings at a specific level (H1, H2, etc.).
     /// </summary>
+    /// <param name="document">The Word document to search</param>
+    /// <param name="level">Heading level (1-9)</param>
+    public static IEnumerable<DocumentNode> GetHeadingsAtLevel(this WordDocument document, int level)
+        => document.Root.GetHeadingsAtLevel(level);
+
+    /// <summary>
+    /// Gets all headings at a specific level (H1, H2, etc.).
+    /// </summary>
     /// <param name="root">Root node to search from</param>
     /// <param name="level">Heading level (1-9)</param>
     public static IEnumerable<DocumentNode> GetHeadingsAtLevel(this DocumentNode root, int level)
         => root.FindAll(n => n.Type == ContentType.Heading && n.HeadingLevel == level);
+
+    /// <summary>
+    /// Gets all headings in the document.
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetAllHeadings(this WordDocument document)
+        => document.Root.GetAllHeadings();
 
     /// <summary>
     /// Gets all headings in the document.
@@ -26,8 +40,20 @@ public static class TreeQueryExtensions
     /// <summary>
     /// Gets all tables in the document.
     /// </summary>
+    public static IEnumerable<DocumentNode> GetAllTables(this WordDocument document)
+        => document.Root.GetAllTables();
+
+    /// <summary>
+    /// Gets all tables in the document.
+    /// </summary>
     public static IEnumerable<DocumentNode> GetAllTables(this DocumentNode root)
         => root.FindAll(n => n.Type == ContentType.Table);
+
+    /// <summary>
+    /// Gets all images in the document.
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetAllImages(this WordDocument document)
+        => document.Root.GetAllImages();
 
     /// <summary>
     /// Gets all images in the document.
@@ -39,8 +65,21 @@ public static class TreeQueryExtensions
     /// Gets the table of contents as a flat list with level info.
     /// </summary>
     /// <returns>List of tuples (HeadingLevel, HeadingText, Node)</returns>
+    public static List<(int Level, string Title, DocumentNode Node)> GetTableOfContents(this WordDocument document)
+        => document.Root.GetTableOfContents();
+
+    /// <summary>
+    /// Gets the table of contents as a flat list with level info.
+    /// </summary>
+    /// <returns>List of tuples (HeadingLevel, HeadingText, Node)</returns>
     public static List<(int Level, string Title, DocumentNode Node)> GetTableOfContents(this DocumentNode root)
         => [.. root.GetAllHeadings().Select(h => (h.HeadingLevel, h.Text, h))];
+
+    /// <summary>
+    /// Gets all text content under a node (recursive).
+    /// </summary>
+    public static string GetAllText(this WordDocument document)
+        => document.Root.GetAllText();
 
     /// <summary>
     /// Gets all text content under a node (recursive).
@@ -61,6 +100,13 @@ public static class TreeQueryExtensions
 
         return string.Join("\n", texts.Where(t => !string.IsNullOrWhiteSpace(t)));
     }
+
+    /// <summary>
+    /// Counts nodes by content type.
+    /// </summary>
+    /// <returns>Dictionary mapping ContentType to count</returns>
+    public static Dictionary<ContentType, int> CountByType(this WordDocument document)
+        => document.Root.CountByType();
 
     /// <summary>
     /// Counts nodes by content type.

@@ -28,9 +28,9 @@ public class WordDocumentTreeParser : IDocumentParser
     private readonly Dictionary<string, string> _hyperlinkUrls = [];
 
     /// <summary>
-    /// Parses a Word document from a file path and returns the document tree
+    /// Parses a Word document from a file path and returns the document
     /// </summary>
-    public DocumentNode ParseFromFile(string filePath)
+    public WordDocument ParseFromFile(string filePath)
     {
         if (!File.Exists(filePath))
             throw new FileNotFoundException($"Document not found: {filePath}");
@@ -40,9 +40,9 @@ public class WordDocumentTreeParser : IDocumentParser
     }
 
     /// <summary>
-    /// Parses a Word document from a stream and returns the document tree
+    /// Parses a Word document from a stream and returns the document
     /// </summary>
-    public DocumentNode ParseFromStream(Stream stream, string documentName = "Document")
+    public WordDocument ParseFromStream(Stream stream, string documentName = "Document")
     {
         _document = WordprocessingDocument.Open(stream, false);
         _mainPart = _document.MainDocumentPart;
@@ -60,14 +60,18 @@ public class WordDocumentTreeParser : IDocumentParser
             Metadata = { ["FileName"] = documentName }
         };
 
-        // Extract and store all document package data for round-trip fidelity
-        root.PackageData = ExtractPackageData();
+        // Extract document package data for round-trip fidelity
+        var packageData = ExtractPackageData();
 
         // Parse all body elements
         var bodyElements = _mainPart.Document.Body.Elements().ToList();
         BuildTree(root, bodyElements);
 
-        return root;
+        // Create and return the WordDocument with root and package data
+        return new WordDocument(root, packageData)
+        {
+            FileName = documentName
+        };
     }
 
     /// <summary>

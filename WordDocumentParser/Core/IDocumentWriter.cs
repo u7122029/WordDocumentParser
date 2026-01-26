@@ -6,16 +6,16 @@ namespace WordDocumentParser.Core;
 public interface IDocumentWriter : IDisposable
 {
     /// <summary>
-    /// Writes a document tree to a file.
+    /// Writes a document to a file.
     /// </summary>
-    /// <param name="root">Root node of the document tree</param>
+    /// <param name="document">The Word document to write</param>
     /// <param name="filePath">Path to write the .docx file</param>
-    void WriteToFile(DocumentNode root, string filePath);
+    void WriteToFile(WordDocument document, string filePath);
 
     /// <summary>
-    /// Writes a document tree to a stream.
+    /// Writes a document to a stream.
     /// </summary>
-    /// <param name="root">Root node of the document tree</param>
+    /// <param name="document">The Word document to write</param>
     /// <param name="stream">Stream to write the .docx data</param>
-    void WriteToStream(DocumentNode root, Stream stream);
+    void WriteToStream(WordDocument document, Stream stream);
 }

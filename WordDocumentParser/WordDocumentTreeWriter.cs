@@ -33,14 +33,14 @@ public class WordDocumentTreeWriter : IDocumentWriter
     private DocumentPackageData? _packageData;
 
     /// <summary>
-    /// Writes a document tree to a file
+    /// Writes a document to a file
     /// </summary>
-    public void WriteToFile(DocumentNode root, string filePath)
+    public void WriteToFile(WordDocument document, string filePath)
     {
         _document = WordprocessingDocument.Create(filePath, WordprocessingDocumentType.Document);
         try
         {
-            BuildDocument(root);
+            BuildDocument(document);
             _document.Save();
         }
         finally
@@ -51,14 +51,14 @@ public class WordDocumentTreeWriter : IDocumentWriter
     }
 
     /// <summary>
-    /// Writes a document tree to a stream
+    /// Writes a document to a stream
     /// </summary>
-    public void WriteToStream(DocumentNode root, Stream stream)
+    public void WriteToStream(WordDocument document, Stream stream)
     {
         _document = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document, false);
         try
         {
-            BuildDocument(root);
+            BuildDocument(document);
             _document.Save();
         }
         finally
@@ -69,9 +69,9 @@ public class WordDocumentTreeWriter : IDocumentWriter
     }
 
     /// <summary>
-    /// Builds the document content from the tree
+    /// Builds the document content from the WordDocument
     /// </summary>
-    private void BuildDocument(DocumentNode root)
+    private void BuildDocument(WordDocument document)
     {
         // Clear mappings for fresh document
         _imageRelationshipMapping.Clear();
@@ -80,7 +80,7 @@ public class WordDocumentTreeWriter : IDocumentWriter
         _headerRelationshipMapping.Clear();
         _footerRelationshipMapping.Clear();
 
-        _packageData = root.PackageData;
+        _packageData = document.PackageData;
         _mainPart = _document!.AddMainDocumentPart();
         _mainPart.Document = new Document();
         _body = new Body();
@@ -97,7 +97,7 @@ public class WordDocumentTreeWriter : IDocumentWriter
         }
 
         // Process the document tree
-        ProcessNode(root);
+        ProcessNode(document.Root);
 
         // Add section properties for page layout
         AddSectionProperties();

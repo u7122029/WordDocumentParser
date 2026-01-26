@@ -64,13 +64,16 @@ public static class DocumentCreationDemo
         conclusion.AddChild(new DocumentNode(ContentType.Paragraph,
             "This demonstrates the round-trip capability of parsing and writing Word documents."));
 
+        // Create the WordDocument wrapper
+        var document = new WordDocument(root);
+
         // Save the document
         var outputPath = System.IO.Path.Combine(Environment.CurrentDirectory, "SampleDocument.docx");
-        root.SaveToFile(outputPath);
+        document.SaveToFile(outputPath);
         Console.WriteLine($"Sample document created: {outputPath}");
 
         // Display the tree structure
         Console.WriteLine("\nDocument Tree Structure:");
-        Console.WriteLine(root.ToTreeString());
+        Console.WriteLine(document.ToTreeString());
     }
 }

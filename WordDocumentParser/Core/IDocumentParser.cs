@@ -9,14 +9,14 @@ public interface IDocumentParser : IDisposable
     /// Parses a Word document from a file path.
     /// </summary>
     /// <param name="filePath">Path to the .docx file</param>
-    /// <returns>Root node of the document tree</returns>
-    DocumentNode ParseFromFile(string filePath);
+    /// <returns>The parsed Word document with metadata and content structure</returns>
+    WordDocument ParseFromFile(string filePath);
 
     /// <summary>
     /// Parses a Word document from a stream.
     /// </summary>
     /// <param name="stream">Stream containing the .docx data</param>
     /// <param name="documentName">Optional name for the document</param>
-    /// <returns>Root node of the document tree</returns>
-    DocumentNode ParseFromStream(Stream stream, string documentName = "Document");
+    /// <returns>The parsed Word document with metadata and content structure</returns>
+    WordDocument ParseFromStream(Stream stream, string documentName = "Document");
 }

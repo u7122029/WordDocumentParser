@@ -11,8 +11,20 @@ public static class ContentControlExtensions
     /// <summary>
     /// Gets all content controls in the document (both block-level and inline).
     /// </summary>
+    public static IEnumerable<DocumentNode> GetAllContentControls(this WordDocument document)
+        => document.Root.FindAll(n => n.IsContentControl || n.HasInlineContentControls());
+
+    /// <summary>
+    /// Gets all content controls in the node tree (both block-level and inline).
+    /// </summary>
     public static IEnumerable<DocumentNode> GetAllContentControls(this DocumentNode root)
         => root.FindAll(n => n.IsContentControl || n.HasInlineContentControls());
+
+    /// <summary>
+    /// Gets all content controls of a specific type.
+    /// </summary>
+    public static IEnumerable<DocumentNode> GetContentControlsByType(this WordDocument document, ContentControlType type)
+        => document.Root.GetContentControlsByType(type);
 
     /// <summary>
     /// Gets all content controls of a specific type.
@@ -39,10 +51,22 @@ public static class ContentControlExtensions
     /// <summary>
     /// Finds a content control by its tag (checks both block-level and inline).
     /// </summary>
+    public static DocumentNode? FindContentControlByTag(this WordDocument document, string tag)
+        => document.Root.FindContentControlByTag(tag);
+
+    /// <summary>
+    /// Finds a content control by its tag (checks both block-level and inline).
+    /// </summary>
     public static DocumentNode? FindContentControlByTag(this DocumentNode root, string tag)
         => root.FindFirst(n =>
             n.ContentControlProperties?.Tag == tag ||
             n.Runs.Any(r => r.ContentControlProperties?.Tag == tag));
+
+    /// <summary>
+    /// Finds a content control by its alias/title (checks both block-level and inline).
+    /// </summary>
+    public static DocumentNode? FindContentControlByAlias(this WordDocument document, string alias)
+        => document.Root.FindContentControlByAlias(alias);
 
     /// <summary>
     /// Finds a content control by its alias/title (checks both block-level and inline).
@@ -55,10 +79,23 @@ public static class ContentControlExtensions
     /// <summary>
     /// Finds a content control by its ID (checks both block-level and inline).
     /// </summary>
+    public static DocumentNode? FindContentControlById(this WordDocument document, int id)
+        => document.Root.FindContentControlById(id);
+
+    /// <summary>
+    /// Finds a content control by its ID (checks both block-level and inline).
+    /// </summary>
     public static DocumentNode? FindContentControlById(this DocumentNode root, int id)
         => root.FindFirst(n =>
             n.ContentControlProperties?.Id == id ||
             n.Runs.Any(r => r.ContentControlProperties?.Id == id));
+
+    /// <summary>
+    /// Sets the value of a content control by tag.
+    /// </summary>
+    /// <returns>True if control was found and updated</returns>
+    public static bool SetContentControlValueByTag(this WordDocument document, string tag, string newValue)
+        => document.Root.SetContentControlValueByTag(tag, newValue);
 
     /// <summary>
     /// Sets the value of a content control by tag.
@@ -88,6 +125,13 @@ public static class ContentControlExtensions
     /// Sets the value of a content control by alias.
     /// </summary>
     /// <returns>True if control was found and updated</returns>
+    public static bool SetContentControlValueByAlias(this WordDocument document, string alias, string newValue)
+        => document.Root.SetContentControlValueByAlias(alias, newValue);
+
+    /// <summary>
+    /// Sets the value of a content control by alias.
+    /// </summary>
+    /// <returns>True if control was found and updated</returns>
     public static bool SetContentControlValueByAlias(this DocumentNode root, string alias, string newValue)
     {
         var control = root.FindContentControlByAlias(alias);
@@ -111,10 +155,22 @@ public static class ContentControlExtensions
     /// <summary>
     /// Gets all content control tags in the document.
     /// </summary>
+    public static IEnumerable<string> GetContentControlTags(this WordDocument document)
+        => document.Root.GetContentControlTags();
+
+    /// <summary>
+    /// Gets all content control tags in the node tree.
+    /// </summary>
     public static IEnumerable<string> GetContentControlTags(this DocumentNode root)
         => root.GetAllContentControls()
             .Where(n => !string.IsNullOrEmpty(n.ContentControlProperties?.Tag))
             .Select(n => n.ContentControlProperties!.Tag!);
+
+    /// <summary>
+    /// Gets content control properties by tag.
+    /// </summary>
+    public static ContentControlProperties? GetContentControlPropertiesByTag(this WordDocument document, string tag)
+        => document.Root.GetContentControlPropertiesByTag(tag);
 
     /// <summary>
     /// Gets content control properties by tag.
@@ -167,7 +223,14 @@ public static class ContentControlExtensions
     }
 
     /// <summary>
-    /// Removes all content controls from a document, keeping text content.
+    /// Removes all content controls from the document, keeping text content.
+    /// </summary>
+    /// <returns>Number of nodes modified</returns>
+    public static int RemoveAllContentControls(this WordDocument document)
+        => document.Root.RemoveAllContentControls();
+
+    /// <summary>
+    /// Removes all content controls from the node tree, keeping text content.
     /// </summary>
     /// <returns>Number of nodes modified</returns>
     public static int RemoveAllContentControls(this DocumentNode root)
@@ -186,6 +249,12 @@ public static class ContentControlExtensions
     /// <summary>
     /// Removes a content control by its tag, keeping text content.
     /// </summary>
+    public static bool RemoveContentControlByTag(this WordDocument document, string tag)
+        => document.Root.RemoveContentControlByTag(tag);
+
+    /// <summary>
+    /// Removes a content control by its tag, keeping text content.
+    /// </summary>
     public static bool RemoveContentControlByTag(this DocumentNode root, string tag)
     {
         var node = root.FindContentControlByTag(tag);
@@ -197,6 +266,12 @@ public static class ContentControlExtensions
 
         return node.RemoveContentControl(ccId);
     }
+
+    /// <summary>
+    /// Removes a content control by its alias, keeping text content.
+    /// </summary>
+    public static bool RemoveContentControlByAlias(this WordDocument document, string alias)
+        => document.Root.RemoveContentControlByAlias(alias);
 
     /// <summary>
     /// Removes a content control by its alias, keeping text content.

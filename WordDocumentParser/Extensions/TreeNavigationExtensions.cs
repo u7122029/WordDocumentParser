@@ -10,6 +10,15 @@ public static class TreeNavigationExtensions
     /// <summary>
     /// Finds all nodes matching a predicate (depth-first traversal).
     /// </summary>
+    /// <param name="document">The Word document to search</param>
+    /// <param name="predicate">Condition to match</param>
+    /// <returns>All matching nodes in document order</returns>
+    public static IEnumerable<DocumentNode> FindAll(this WordDocument document, Func<DocumentNode, bool> predicate)
+        => document.Root.FindAll(predicate);
+
+    /// <summary>
+    /// Finds all nodes matching a predicate (depth-first traversal).
+    /// </summary>
     /// <param name="root">Starting node for the search</param>
     /// <param name="predicate">Condition to match</param>
     /// <returns>All matching nodes in document order</returns>
@@ -26,6 +35,12 @@ public static class TreeNavigationExtensions
             }
         }
     }
+
+    /// <summary>
+    /// Finds the first node matching a predicate.
+    /// </summary>
+    public static DocumentNode? FindFirst(this WordDocument document, Func<DocumentNode, bool> predicate)
+        => document.Root.FindFirst(predicate);
 
     /// <summary>
     /// Finds the first node matching a predicate.
@@ -102,6 +117,12 @@ public static class TreeNavigationExtensions
     /// <summary>
     /// Flattens the tree to a list in document order.
     /// </summary>
+    public static List<DocumentNode> Flatten(this WordDocument document)
+        => document.Root.Flatten();
+
+    /// <summary>
+    /// Flattens the tree to a list in document order.
+    /// </summary>
     public static List<DocumentNode> Flatten(this DocumentNode root)
     {
         List<DocumentNode> result = [root];
@@ -113,6 +134,12 @@ public static class TreeNavigationExtensions
 
         return result;
     }
+
+    /// <summary>
+    /// Gets a section by heading text (case-insensitive partial match).
+    /// </summary>
+    public static DocumentNode? GetSection(this WordDocument document, string headingText)
+        => document.Root.GetSection(headingText);
 
     /// <summary>
     /// Gets a section by heading text (case-insensitive partial match).

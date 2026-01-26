@@ -10,6 +10,12 @@ public static class DocumentPropertyExtensions
     /// <summary>
     /// Gets all document property content controls.
     /// </summary>
+    public static IEnumerable<DocumentNode> GetDocumentPropertyControls(this WordDocument document)
+        => document.Root.GetDocumentPropertyControls();
+
+    /// <summary>
+    /// Gets all document property content controls.
+    /// </summary>
     public static IEnumerable<DocumentNode> GetDocumentPropertyControls(this DocumentNode root)
         => root.GetContentControlsByType(ContentControlType.DocumentProperty);
 
@@ -18,6 +24,12 @@ public static class DocumentPropertyExtensions
     /// </summary>
     public static IEnumerable<DocumentNode> GetNodesWithDocumentPropertyFields(this DocumentNode root)
         => root.FindAll(n => n.HasDocumentPropertyFields);
+
+    /// <summary>
+    /// Gets all document property fields in the document.
+    /// </summary>
+    public static IEnumerable<DocumentPropertyField> GetAllDocumentPropertyFields(this WordDocument document)
+        => document.Root.GetAllDocumentPropertyFields();
 
     /// <summary>
     /// Gets all document property fields in the document.
@@ -35,6 +47,12 @@ public static class DocumentPropertyExtensions
             }
         }
     }
+
+    /// <summary>
+    /// Gets all text with metadata annotations for document properties and content controls.
+    /// </summary>
+    public static string GetAllTextWithMetadata(this WordDocument document)
+        => document.Root.GetAllTextWithMetadata();
 
     /// <summary>
     /// Gets all text with metadata annotations for document properties and content controls.
@@ -90,6 +108,13 @@ public static class DocumentPropertyExtensions
 
         return removed;
     }
+
+    /// <summary>
+    /// Removes all document property fields from a document, keeping text content.
+    /// </summary>
+    /// <returns>Number of nodes modified</returns>
+    public static int RemoveAllDocumentPropertyFields(this WordDocument document)
+        => document.Root.RemoveAllDocumentPropertyFields();
 
     /// <summary>
     /// Removes all document property fields from a document, keeping text content.
