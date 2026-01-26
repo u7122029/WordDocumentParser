@@ -250,7 +250,7 @@ public class DocumentNode(ContentType type)
     {
         var prefix = new string(' ', indent * 2);
         var typeLabel = Type == ContentType.Heading ? $"H{HeadingLevel}" : Type.ToString();
-        var textPreview = Text.Length > 50 ? $"{Text[..47]}... ({GetTextWithMetadata()[..47]})" : $"{Text} ({GetTextWithMetadata()})";
+        var textPreview = Text.Length > 80 ? $"{Text[..77]}... ({GetTextWithMetadata()[..77]})" : $"{Text} ({GetTextWithMetadata()})";
         var result = $"{prefix}[{typeLabel}][{ParagraphFormatting?.StyleId}] {textPreview}\n";
 
         foreach (var child in Children)
@@ -265,6 +265,6 @@ public class DocumentNode(ContentType type)
     public override string ToString()
     {
         var typeLabel = Type == ContentType.Heading ? $"Heading{HeadingLevel}" : Type.ToString();
-        return $"{typeLabel}: {(Text.Length > 30 ? $"{Text[..27]}..." : Text)}";
+        return $"{typeLabel}: {(Text.Length > 30 ? $"{Text[..77]}..." : Text)}";
     }
 }

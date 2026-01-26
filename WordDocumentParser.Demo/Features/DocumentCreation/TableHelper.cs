@@ -1,8 +1,7 @@
-using WordDocumentParser;
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Tables;
 
-namespace WordDocumentParser.Demo;
+namespace WordDocumentParser.Demo.Features.DocumentCreation;
 
 /// <summary>
 /// Helper methods for creating tables in demos.

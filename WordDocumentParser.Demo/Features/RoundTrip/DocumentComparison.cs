@@ -1,10 +1,10 @@
 using System;
 using System.Linq;
+using DocumentFormat.OpenXml.CustomProperties;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
-using DocumentFormat.OpenXml.CustomProperties;
 
-namespace WordDocumentParser.Demo;
+namespace WordDocumentParser.Demo.Features.RoundTrip;
 
 /// <summary>
 /// Provides document comparison functionality for demos.

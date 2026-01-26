@@ -3,7 +3,7 @@ using System.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 
-namespace WordDocumentParser.Demo;
+namespace WordDocumentParser.Demo.Features.RoundTrip;
 
 /// <summary>
 /// Provides document validation functionality for demos.
