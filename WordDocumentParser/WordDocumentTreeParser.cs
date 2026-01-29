@@ -136,7 +136,7 @@ public class WordDocumentTreeParser : IDocumentParser
             packageData.EndnotesXml = _mainPart.EndnotesPart.Endnotes.OuterXml;
         }
 
-        // Extract headers
+        // Extract headers and their images
         foreach (var headerPart in _mainPart?.HeaderParts ?? [])
         {
             var relId = _mainPart!.GetIdOfPart(headerPart);
@@ -144,15 +144,71 @@ public class WordDocumentTreeParser : IDocumentParser
             {
                 packageData.Headers[relId] = headerPart.Header.OuterXml;
             }
+
+            // Extract images from this header
+            var headerImages = new Dictionary<string, ImagePartData>();
+            foreach (var imagePart in headerPart.ImageParts)
+            {
+                var imgRelId = headerPart.GetIdOfPart(imagePart);
+                try
+                {
+                    using var imgStream = imagePart.GetStream();
+                    using var ms = new MemoryStream();
+                    imgStream.CopyTo(ms);
+                    headerImages[imgRelId] = new ImagePartData
+                    {
+                        ContentType = imagePart.ContentType,
+                        Data = ms.ToArray(),
+                        OriginalRelationshipId = imgRelId,
+                        OriginalUri = imagePart.Uri?.ToString()
+                    };
+                }
+                catch
+                {
+                    // Skip images that can't be read
+                }
+            }
+            if (headerImages.Count > 0)
+            {
+                packageData.HeaderImages[relId] = headerImages;
+            }
         }
 
-        // Extract footers
+        // Extract footers and their images
         foreach (var footerPart in _mainPart?.FooterParts ?? [])
         {
             var relId = _mainPart!.GetIdOfPart(footerPart);
             if (footerPart.Footer is not null)
             {
                 packageData.Footers[relId] = footerPart.Footer.OuterXml;
+            }
+
+            // Extract images from this footer
+            var footerImages = new Dictionary<string, ImagePartData>();
+            foreach (var imagePart in footerPart.ImageParts)
+            {
+                var imgRelId = footerPart.GetIdOfPart(imagePart);
+                try
+                {
+                    using var imgStream = imagePart.GetStream();
+                    using var ms = new MemoryStream();
+                    imgStream.CopyTo(ms);
+                    footerImages[imgRelId] = new ImagePartData
+                    {
+                        ContentType = imagePart.ContentType,
+                        Data = ms.ToArray(),
+                        OriginalRelationshipId = imgRelId,
+                        OriginalUri = imagePart.Uri?.ToString()
+                    };
+                }
+                catch
+                {
+                    // Skip images that can't be read
+                }
+            }
+            if (footerImages.Count > 0)
+            {
+                packageData.FooterImages[relId] = footerImages;
             }
         }
 

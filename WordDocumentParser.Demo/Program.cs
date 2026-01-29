@@ -6,6 +6,7 @@ using WordDocumentParser.Demo.Features.DocumentProperties;
 using WordDocumentParser.Demo.Features.Examples;
 using WordDocumentParser.Demo.Features.Parsing;
 using WordDocumentParser.Demo.Features.RoundTrip;
+using WordDocumentParser.Demo.Features.Styles;
 
 namespace WordDocumentParser.Demo;
 
@@ -21,6 +22,11 @@ class Program
 
         if (File.Exists(filePath))
         {
+            // Demo: Paragraph Style Modification
+            Console.WriteLine("\n\nParagraph Style Demo:");
+            Console.WriteLine("=====================");
+            ParagraphStyleDemo.Run(filePath);
+
             // DocumentStructureDemo.Run(filePath);
 
             // // Demo: Content Controls - Read and Modify
@@ -39,9 +45,9 @@ class Program
             // DocumentPropertyDemo.Run(filePath);
 
             // Demo: Write the parsed document back to a new file
-            Console.WriteLine("\n\nWriting Document Demo:");
-            Console.WriteLine("======================");
-            RoundTripDemo.Run(filePath);
+            // Console.WriteLine("\n\nWriting Document Demo:");
+            // Console.WriteLine("======================");
+            // RoundTripDemo.Run(filePath);
         }
         else
         {

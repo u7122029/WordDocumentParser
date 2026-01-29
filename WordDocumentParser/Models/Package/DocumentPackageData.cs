@@ -72,6 +72,16 @@ public class DocumentPackageData
     public Dictionary<string, string> Footers { get; set; } = [];
 
     /// <summary>
+    /// Image parts from headers - key is header relationship ID, value is dictionary of image relationship ID to image data
+    /// </summary>
+    public Dictionary<string, Dictionary<string, ImagePartData>> HeaderImages { get; set; } = [];
+
+    /// <summary>
+    /// Image parts from footers - key is footer relationship ID, value is dictionary of image relationship ID to image data
+    /// </summary>
+    public Dictionary<string, Dictionary<string, ImagePartData>> FooterImages { get; set; } = [];
+
+    /// <summary>
     /// Image parts - key is the relationship ID, value is the image data
     /// </summary>
     public Dictionary<string, ImagePartData> Images { get; set; } = [];

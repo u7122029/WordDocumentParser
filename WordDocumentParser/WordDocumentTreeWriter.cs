@@ -225,12 +225,48 @@ public class WordDocumentTreeWriter : IDocumentWriter
         }
 
         // Restore headers and create relationship mapping
+        // Note: Headers/footers with complex content (SDT blocks, field codes) may have
+        // some content simplified by the OpenXML SDK during parsing. This is a known
+        // limitation of the SDK's typed API.
         foreach (var kvp in _packageData.Headers)
         {
             var originalRelId = kvp.Key;
             var headerPart = _mainPart!.AddNewPart<HeaderPart>();
-            var headerXml = UpdateImageRelationships(kvp.Value);
+
+            // Use the original XML as-is (don't clean) to preserve all content
+            var headerXml = kvp.Value;
+
+            // Collect image relationship mappings (we'll add images after loading XML)
+            var headerImageMapping = new Dictionary<string, string>();
+
+            // If there are images in this header, we need to add them and update IDs
+            if (_packageData.HeaderImages.TryGetValue(originalRelId, out var headerImages))
+            {
+                foreach (var imgKvp in headerImages)
+                {
+                    var origImgRelId = imgKvp.Key;
+                    var imageData = imgKvp.Value;
+
+                    var imagePart = headerPart.AddImagePart(imageData.ContentType);
+                    using (var stream = new MemoryStream(imageData.Data))
+                    {
+                        imagePart.FeedData(stream);
+                    }
+                    var newImgRelId = headerPart.GetIdOfPart(imagePart);
+                    headerImageMapping[origImgRelId] = newImgRelId;
+                }
+
+                // Update XML with new image relationship IDs
+                foreach (var imgMap in headerImageMapping)
+                {
+                    headerXml = headerXml.Replace($"r:embed=\"{imgMap.Key}\"", $"r:embed=\"{imgMap.Value}\"");
+                    headerXml = headerXml.Replace($"r:id=\"{imgMap.Key}\"", $"r:id=\"{imgMap.Value}\"");
+                }
+            }
+
+            // Create Header from XML - the SDK will parse and preserve recognized content
             headerPart.Header = new Header(headerXml);
+
             var newRelId = _mainPart.GetIdOfPart(headerPart);
             _headerRelationshipMapping[originalRelId] = newRelId;
         }
@@ -240,8 +276,41 @@ public class WordDocumentTreeWriter : IDocumentWriter
         {
             var originalRelId = kvp.Key;
             var footerPart = _mainPart!.AddNewPart<FooterPart>();
-            var footerXml = UpdateImageRelationships(kvp.Value);
+
+            // Use the original XML as-is (don't clean) to preserve all content
+            var footerXml = kvp.Value;
+
+            // Collect image relationship mappings
+            var footerImageMapping = new Dictionary<string, string>();
+
+            // If there are images in this footer, add them and update IDs
+            if (_packageData.FooterImages.TryGetValue(originalRelId, out var footerImages))
+            {
+                foreach (var imgKvp in footerImages)
+                {
+                    var origImgRelId = imgKvp.Key;
+                    var imageData = imgKvp.Value;
+
+                    var imagePart = footerPart.AddImagePart(imageData.ContentType);
+                    using (var stream = new MemoryStream(imageData.Data))
+                    {
+                        imagePart.FeedData(stream);
+                    }
+                    var newImgRelId = footerPart.GetIdOfPart(imagePart);
+                    footerImageMapping[origImgRelId] = newImgRelId;
+                }
+
+                // Update XML with new image relationship IDs
+                foreach (var imgMap in footerImageMapping)
+                {
+                    footerXml = footerXml.Replace($"r:embed=\"{imgMap.Key}\"", $"r:embed=\"{imgMap.Value}\"");
+                    footerXml = footerXml.Replace($"r:id=\"{imgMap.Key}\"", $"r:id=\"{imgMap.Value}\"");
+                }
+            }
+
+            // Create Footer from XML - the SDK will parse and preserve recognized content
             footerPart.Footer = new Footer(footerXml);
+
             var newRelId = _mainPart.GetIdOfPart(footerPart);
             _footerRelationshipMapping[originalRelId] = newRelId;
         }
@@ -409,6 +478,42 @@ public class WordDocumentTreeWriter : IDocumentWriter
         result = System.Text.RegularExpressions.Regex.Replace(result, @"Requires=""wpc""", @"Requires=""""");
 
         return result;
+    }
+
+    /// <summary>
+    /// Cleans header/footer XML with minimal modifications to preserve content.
+    /// Only removes rsid attributes and updates mc:Ignorable to avoid validation issues,
+    /// but keeps w14/w15/w16 attributes that are essential for preserving content structure.
+    /// </summary>
+    private static string CleanHeaderFooterXml(string xml)
+    {
+        var result = xml;
+
+        // Only remove rsid attributes (revision save IDs) which can cause issues
+        result = System.Text.RegularExpressions.Regex.Replace(result, @"\s+w:rsid[A-Za-z]*=""[^""]*""", "");
+
+        return result;
+    }
+
+    /// <summary>
+    /// Writes XML content directly to an OpenXML part, bypassing the strongly-typed API
+    /// to preserve exact XML structure including extension elements.
+    /// </summary>
+    private static void WriteXmlToPart(OpenXmlPart part, string xml)
+    {
+        // Use UTF-8 encoding without BOM to match Word's format
+        var encoding = new System.Text.UTF8Encoding(false);
+
+        using (var stream = part.GetStream(FileMode.Create, FileAccess.Write))
+        using (var writer = new StreamWriter(stream, encoding))
+        {
+            // Add XML declaration if not present
+            if (!xml.TrimStart().StartsWith("<?xml", StringComparison.OrdinalIgnoreCase))
+            {
+                writer.Write("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>");
+            }
+            writer.Write(xml);
+        }
     }
 
     /// <summary>
