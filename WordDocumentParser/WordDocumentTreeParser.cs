@@ -53,7 +53,7 @@ public class WordDocumentTreeParser : IDocumentParser
         _context.CacheStyles();
         _context.CacheHyperlinkRelationships();
         _imageExtractor = new ImageExtractor(_context);
-        _tableExtractor = new TableExtractor(_context, ProcessParagraph);
+        _tableExtractor = new TableExtractor(_context, ProcessParagraph, ProcessTable);
 
         // Create root node
         var root = new DocumentNode(ContentType.Document, documentName)

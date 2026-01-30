@@ -7,6 +7,7 @@ using WordDocumentParser.Demo.Features.Examples;
 using WordDocumentParser.Demo.Features.Parsing;
 using WordDocumentParser.Demo.Features.RoundTrip;
 using WordDocumentParser.Demo.Features.Styles;
+using WordDocumentParser.Demo.Features.Tables;
 
 namespace WordDocumentParser.Demo;
 
@@ -18,14 +19,14 @@ class Program
     static void Main(string[] args)
     {
         // Example usage with a file path
-        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\FDE EM SD v3.docx";
+        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\inner_table_testing.docx";
 
         if (File.Exists(filePath))
         {
             // Demo: Paragraph Style Modification
-            Console.WriteLine("\n\nParagraph Style Demo:");
-            Console.WriteLine("=====================");
-            ParagraphStyleDemo.Run(filePath);
+            //Console.WriteLine("\n\nParagraph Style Demo:");
+            //Console.WriteLine("=====================");
+            //ParagraphStyleDemo.Run(filePath);
 
             // DocumentStructureDemo.Run(filePath);
 
@@ -48,6 +49,11 @@ class Program
             // Console.WriteLine("\n\nWriting Document Demo:");
             // Console.WriteLine("======================");
             // RoundTripDemo.Run(filePath);
+
+            // Demo: Table parsing and manipulation
+            Console.WriteLine("\n\nTable Parsing Demo:");
+            Console.WriteLine("===================");
+            TableParsing.Run(filePath);
         }
         else
         {

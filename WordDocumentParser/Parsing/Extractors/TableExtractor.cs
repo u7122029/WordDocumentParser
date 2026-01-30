@@ -16,11 +16,13 @@ internal sealed class TableExtractor
 {
     private readonly ParsingContext _context;
     private readonly Func<Paragraph, DocumentNode?> _processParagraph;
+    private readonly Func<Table, DocumentNode>? _processNestedTable;
 
-    public TableExtractor(ParsingContext context, Func<Paragraph, DocumentNode?> processParagraph)
+    public TableExtractor(ParsingContext context, Func<Paragraph, DocumentNode?> processParagraph, Func<Table, DocumentNode>? processNestedTable = null)
     {
         _context = context;
         _processParagraph = processParagraph;
+        _processNestedTable = processNestedTable ?? ProcessTable;
     }
 
     /// <summary>
@@ -73,13 +75,21 @@ internal sealed class TableExtractor
                         tableCell.RowSpan = 0;
                 }
 
-                // Process cell content
-                foreach (var para in cell.Elements<Paragraph>())
+                // Process cell content (paragraphs and nested tables)
+                foreach (var element in cell.ChildElements)
                 {
-                    var paraNode = _processParagraph(para);
-                    if (paraNode is not null)
+                    if (element is Paragraph para)
                     {
-                        tableCell.Content.Add(paraNode);
+                        var paraNode = _processParagraph(para);
+                        if (paraNode is not null)
+                        {
+                            tableCell.Content.Add(paraNode);
+                        }
+                    }
+                    else if (element is Table nestedTable && _processNestedTable is not null)
+                    {
+                        var nestedTableNode = _processNestedTable(nestedTable);
+                        tableCell.Content.Add(nestedTableNode);
                     }
                 }
 

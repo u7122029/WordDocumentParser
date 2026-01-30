@@ -1830,6 +1830,14 @@ public class WordDocumentTreeWriter : IDocumentWriter
             // Use UpdateRelationshipsOnly to preserve all table formatting (w14/w15/w16 elements)
             var updatedXml = UpdateRelationshipsOnly(node.OriginalXml);
             var originalTable = new Table(updatedXml);
+
+            // Apply modifications from TableData to the parsed table
+            var modifiedTableData = node.GetTableData();
+            if (modifiedTableData != null)
+            {
+                ApplyTableDataModifications(originalTable, modifiedTableData);
+            }
+
             FixIndentationAttributes(originalTable);
             _body!.Append(originalTable);
             // Don't add extra paragraph - preserve original document structure
@@ -2183,6 +2191,230 @@ public class WordDocumentTreeWriter : IDocumentWriter
         }
 
         return props;
+    }
+
+    /// <summary>
+    /// Applies modifications from TableData to a parsed table XML element.
+    /// Updates cell text, cell formatting (shading, borders), and row formatting.
+    /// </summary>
+    private void ApplyTableDataModifications(Table table, Models.Tables.TableData tableData)
+    {
+        var xmlRows = table.Elements<DocumentFormat.OpenXml.Wordprocessing.TableRow>().ToList();
+
+        for (var rowIndex = 0; rowIndex < tableData.Rows.Count && rowIndex < xmlRows.Count; rowIndex++)
+        {
+            var dataRow = tableData.Rows[rowIndex];
+            var xmlRow = xmlRows[rowIndex];
+
+            // Apply row-level formatting changes
+            ApplyRowFormatting(xmlRow, dataRow);
+
+            var xmlCells = xmlRow.Elements<DocumentFormat.OpenXml.Wordprocessing.TableCell>().ToList();
+
+            for (var cellIndex = 0; cellIndex < dataRow.Cells.Count && cellIndex < xmlCells.Count; cellIndex++)
+            {
+                var dataCell = dataRow.Cells[cellIndex];
+                var xmlCell = xmlCells[cellIndex];
+
+                // Apply cell-level formatting changes
+                ApplyCellFormatting(xmlCell, dataCell);
+
+                // Apply text changes to cell content
+                ApplyCellTextChanges(xmlCell, dataCell);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies row-level formatting modifications to an XML table row.
+    /// </summary>
+    private void ApplyRowFormatting(DocumentFormat.OpenXml.Wordprocessing.TableRow xmlRow, Models.Tables.TableRow dataRow)
+    {
+        if (dataRow.Formatting == null) return;
+
+        var rowProps = xmlRow.GetFirstChild<TableRowProperties>();
+        if (rowProps == null)
+        {
+            rowProps = new TableRowProperties();
+            xmlRow.InsertAt(rowProps, 0);
+        }
+
+        // Update header status
+        var existingHeader = rowProps.GetFirstChild<TableHeader>();
+        if (dataRow.Formatting.IsHeader && existingHeader == null)
+        {
+            rowProps.Append(new TableHeader());
+        }
+        else if (!dataRow.Formatting.IsHeader && existingHeader != null)
+        {
+            existingHeader.Remove();
+        }
+    }
+
+    /// <summary>
+    /// Applies cell-level formatting modifications to an XML table cell.
+    /// </summary>
+    private void ApplyCellFormatting(DocumentFormat.OpenXml.Wordprocessing.TableCell xmlCell, Models.Tables.TableCell dataCell)
+    {
+        if (dataCell.Formatting == null) return;
+
+        var cellProps = xmlCell.GetFirstChild<TableCellProperties>();
+        if (cellProps == null)
+        {
+            cellProps = new TableCellProperties();
+            xmlCell.InsertAt(cellProps, 0);
+        }
+
+        // Update shading
+        if (!string.IsNullOrEmpty(dataCell.Formatting.ShadingFill))
+        {
+            var existingShading = cellProps.GetFirstChild<Shading>();
+            if (existingShading != null)
+            {
+                existingShading.Fill = dataCell.Formatting.ShadingFill;
+            }
+            else
+            {
+                cellProps.Append(new Shading
+                {
+                    Fill = dataCell.Formatting.ShadingFill,
+                    Val = ShadingPatternValues.Clear
+                });
+            }
+        }
+
+        // Update vertical alignment
+        if (!string.IsNullOrEmpty(dataCell.Formatting.VerticalAlignment))
+        {
+            var vAlign = dataCell.Formatting.VerticalAlignment.ToLowerInvariant() switch
+            {
+                "top" => TableVerticalAlignmentValues.Top,
+                "center" => TableVerticalAlignmentValues.Center,
+                "bottom" => TableVerticalAlignmentValues.Bottom,
+                _ => (TableVerticalAlignmentValues?)null
+            };
+            if (vAlign.HasValue)
+            {
+                var existingAlign = cellProps.GetFirstChild<TableCellVerticalAlignment>();
+                if (existingAlign != null)
+                {
+                    existingAlign.Val = vAlign.Value;
+                }
+                else
+                {
+                    cellProps.Append(new TableCellVerticalAlignment { Val = vAlign.Value });
+                }
+            }
+        }
+
+        // Update borders
+        if (dataCell.Formatting.TopBorder != null || dataCell.Formatting.BottomBorder != null ||
+            dataCell.Formatting.LeftBorder != null || dataCell.Formatting.RightBorder != null)
+        {
+            var existingBorders = cellProps.GetFirstChild<TableCellBorders>();
+            if (existingBorders == null)
+            {
+                existingBorders = new TableCellBorders();
+                cellProps.Append(existingBorders);
+            }
+
+            if (dataCell.Formatting.TopBorder != null)
+            {
+                var existing = existingBorders.GetFirstChild<TopBorder>();
+                existing?.Remove();
+                existingBorders.Append(CreateBorder<TopBorder>(dataCell.Formatting.TopBorder));
+            }
+            if (dataCell.Formatting.BottomBorder != null)
+            {
+                var existing = existingBorders.GetFirstChild<BottomBorder>();
+                existing?.Remove();
+                existingBorders.Append(CreateBorder<BottomBorder>(dataCell.Formatting.BottomBorder));
+            }
+            if (dataCell.Formatting.LeftBorder != null)
+            {
+                var existing = existingBorders.GetFirstChild<LeftBorder>();
+                existing?.Remove();
+                existingBorders.Append(CreateBorder<LeftBorder>(dataCell.Formatting.LeftBorder));
+            }
+            if (dataCell.Formatting.RightBorder != null)
+            {
+                var existing = existingBorders.GetFirstChild<RightBorder>();
+                existing?.Remove();
+                existingBorders.Append(CreateBorder<RightBorder>(dataCell.Formatting.RightBorder));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies text changes from cell content nodes to the XML cell.
+    /// Also handles nested tables recursively.
+    /// </summary>
+    private void ApplyCellTextChanges(DocumentFormat.OpenXml.Wordprocessing.TableCell xmlCell, Models.Tables.TableCell dataCell)
+    {
+        if (dataCell.Content.Count == 0) return;
+
+        var xmlParagraphs = xmlCell.Elements<Paragraph>().ToList();
+        var xmlNestedTables = xmlCell.Elements<Table>().ToList();
+
+        var paraIndex = 0;
+        var tableIndex = 0;
+
+        foreach (var contentNode in dataCell.Content)
+        {
+            // Handle nested tables - apply modifications recursively
+            if (contentNode.Type == Core.ContentType.Table)
+            {
+                if (tableIndex < xmlNestedTables.Count)
+                {
+                    var nestedTableData = contentNode.GetTableData();
+                    if (nestedTableData != null)
+                    {
+                        ApplyTableDataModifications(xmlNestedTables[tableIndex], nestedTableData);
+                    }
+                }
+                tableIndex++;
+                continue;
+            }
+
+            if (paraIndex < xmlParagraphs.Count)
+            {
+                var xmlPara = xmlParagraphs[paraIndex];
+
+                // Get all text elements in this paragraph
+                var textElements = xmlPara.Descendants<Text>().ToList();
+                if (textElements.Count > 0 && !string.IsNullOrEmpty(contentNode.Text))
+                {
+                    // For simple cases, update the first text element
+                    // and clear others if the text was replaced
+                    var firstText = textElements[0];
+                    var originalCombinedText = string.Join("", textElements.Select(t => t.Text));
+
+                    if (contentNode.Text != originalCombinedText)
+                    {
+                        firstText.Text = contentNode.Text;
+                        firstText.Space = SpaceProcessingModeValues.Preserve;
+
+                        // Clear other text elements since we've set all text in the first one
+                        for (var i = 1; i < textElements.Count; i++)
+                        {
+                            textElements[i].Text = "";
+                        }
+                    }
+                }
+                else if (textElements.Count == 0 && !string.IsNullOrEmpty(contentNode.Text))
+                {
+                    // No text elements exist, add a new run with text
+                    var run = xmlPara.GetFirstChild<Run>();
+                    if (run == null)
+                    {
+                        run = new Run();
+                        xmlPara.Append(run);
+                    }
+                    run.Append(new Text(contentNode.Text) { Space = SpaceProcessingModeValues.Preserve });
+                }
+            }
+            paraIndex++;
+        }
     }
 
     /// <summary>
