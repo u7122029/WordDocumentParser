@@ -1394,7 +1394,9 @@ public class WordDocumentTreeWriter : IDocumentWriter
     }
 
     /// <summary>
-    /// Creates paragraph properties from formatting
+    /// Creates paragraph properties from formatting.
+    /// Elements are added in the correct OOXML sequence order:
+    /// pStyle, keepNext, keepLines, pageBreakBefore, widowControl, numPr, pBdr, shd, spacing, ind, jc
     /// </summary>
     private ParagraphProperties CreateParagraphProperties(DocumentNode node)
     {
@@ -1403,41 +1405,46 @@ public class WordDocumentTreeWriter : IDocumentWriter
 
         if (fmt == null) return props;
 
-        // Style
+        // 1. Style (pStyle)
         if (!string.IsNullOrEmpty(fmt.StyleId))
         {
             props.Append(new ParagraphStyleId { Val = fmt.StyleId });
         }
 
-        // Alignment
-        if (!string.IsNullOrEmpty(fmt.Alignment))
+        // 2-5. Keep with next/keep lines/page break/widow control
+        if (fmt.KeepNext) props.Append(new KeepNext());
+        if (fmt.KeepLines) props.Append(new KeepLines());
+        if (fmt.PageBreakBefore) props.Append(new PageBreakBefore());
+        if (fmt.WidowControl) props.Append(new WidowControl());
+
+        // 7. Numbering (numPr) - must come before borders and shading
+        if (fmt.NumberingId.HasValue)
         {
-            var justification = fmt.Alignment switch
-            {
-                "Left" => JustificationValues.Left,
-                "Center" => JustificationValues.Center,
-                "Right" => JustificationValues.Right,
-                "Both" => JustificationValues.Both,
-                _ => (JustificationValues?)null
-            };
-            if (justification.HasValue)
-            {
-                props.Append(new Justification { Val = justification.Value });
-            }
+            props.Append(new NumberingProperties(
+                new NumberingLevelReference { Val = fmt.NumberingLevel ?? 0 },
+                new NumberingId { Val = fmt.NumberingId.Value }
+            ));
         }
 
-        // Indentation
-        if (fmt.IndentLeft != null || fmt.IndentRight != null || fmt.IndentFirstLine != null || fmt.IndentHanging != null)
+        // 9. Borders (pBdr) - must come before shading
+        if (fmt.TopBorder != null || fmt.BottomBorder != null || fmt.LeftBorder != null || fmt.RightBorder != null)
         {
-            var ind = new Indentation();
-            if (fmt.IndentLeft != null) ind.Left = fmt.IndentLeft;
-            if (fmt.IndentRight != null) ind.Right = fmt.IndentRight;
-            if (fmt.IndentFirstLine != null) ind.FirstLine = fmt.IndentFirstLine;
-            if (fmt.IndentHanging != null) ind.Hanging = fmt.IndentHanging;
-            props.Append(ind);
+            var borders = new ParagraphBorders();
+            // Border order within pBdr: top, left, bottom, right
+            if (fmt.TopBorder != null) borders.Append(CreateBorder<TopBorder>(fmt.TopBorder));
+            if (fmt.LeftBorder != null) borders.Append(CreateBorder<LeftBorder>(fmt.LeftBorder));
+            if (fmt.BottomBorder != null) borders.Append(CreateBorder<BottomBorder>(fmt.BottomBorder));
+            if (fmt.RightBorder != null) borders.Append(CreateBorder<RightBorder>(fmt.RightBorder));
+            props.Append(borders);
         }
 
-        // Spacing
+        // 10. Shading (shd)
+        if (!string.IsNullOrEmpty(fmt.ShadingFill))
+        {
+            props.Append(new Shading { Fill = fmt.ShadingFill, Color = fmt.ShadingColor });
+        }
+
+        // 22. Spacing
         if (fmt.SpacingBefore != null || fmt.SpacingAfter != null || fmt.LineSpacing != null)
         {
             var spacing = new SpacingBetweenLines();
@@ -1457,36 +1464,32 @@ public class WordDocumentTreeWriter : IDocumentWriter
             props.Append(spacing);
         }
 
-        // Keep with next/keep lines
-        if (fmt.KeepNext) props.Append(new KeepNext());
-        if (fmt.KeepLines) props.Append(new KeepLines());
-        if (fmt.PageBreakBefore) props.Append(new PageBreakBefore());
-        if (fmt.WidowControl) props.Append(new WidowControl());
-
-        // Shading
-        if (!string.IsNullOrEmpty(fmt.ShadingFill))
+        // 23. Indentation (ind)
+        if (fmt.IndentLeft != null || fmt.IndentRight != null || fmt.IndentFirstLine != null || fmt.IndentHanging != null)
         {
-            props.Append(new Shading { Fill = fmt.ShadingFill, Color = fmt.ShadingColor });
+            var ind = new Indentation();
+            if (fmt.IndentLeft != null) ind.Left = fmt.IndentLeft;
+            if (fmt.IndentRight != null) ind.Right = fmt.IndentRight;
+            if (fmt.IndentFirstLine != null) ind.FirstLine = fmt.IndentFirstLine;
+            if (fmt.IndentHanging != null) ind.Hanging = fmt.IndentHanging;
+            props.Append(ind);
         }
 
-        // Borders
-        if (fmt.TopBorder != null || fmt.BottomBorder != null || fmt.LeftBorder != null || fmt.RightBorder != null)
+        // 27. Alignment (jc) - must come near the end
+        if (!string.IsNullOrEmpty(fmt.Alignment))
         {
-            var borders = new ParagraphBorders();
-            if (fmt.TopBorder != null) borders.Append(CreateBorder<TopBorder>(fmt.TopBorder));
-            if (fmt.BottomBorder != null) borders.Append(CreateBorder<BottomBorder>(fmt.BottomBorder));
-            if (fmt.LeftBorder != null) borders.Append(CreateBorder<LeftBorder>(fmt.LeftBorder));
-            if (fmt.RightBorder != null) borders.Append(CreateBorder<RightBorder>(fmt.RightBorder));
-            props.Append(borders);
-        }
-
-        // Numbering (for list items)
-        if (fmt.NumberingId.HasValue)
-        {
-            props.Append(new NumberingProperties(
-                new NumberingLevelReference { Val = fmt.NumberingLevel ?? 0 },
-                new NumberingId { Val = fmt.NumberingId.Value }
-            ));
+            var justification = fmt.Alignment switch
+            {
+                "Left" => JustificationValues.Left,
+                "Center" => JustificationValues.Center,
+                "Right" => JustificationValues.Right,
+                "Both" => JustificationValues.Both,
+                _ => (JustificationValues?)null
+            };
+            if (justification.HasValue)
+            {
+                props.Append(new Justification { Val = justification.Value });
+            }
         }
 
         return props;
@@ -1584,64 +1587,21 @@ public class WordDocumentTreeWriter : IDocumentWriter
     }
 
     /// <summary>
-    /// Creates run properties from formatting
+    /// Creates run properties from formatting.
+    /// Elements are added in the correct OOXML sequence order:
+    /// rStyle, rFonts, b, i, caps, smallCaps, strike, dstrike, color, sz, szCs, highlight, u, shd, vertAlign
     /// </summary>
     private RunProperties CreateRunProperties(RunFormatting fmt)
     {
         var props = new RunProperties();
 
-        // Style
+        // 1. Style (rStyle)
         if (!string.IsNullOrEmpty(fmt.StyleId))
         {
             props.Append(new RunStyle { Val = fmt.StyleId });
         }
 
-        // Bold
-        if (fmt.Bold)
-        {
-            props.Append(new Bold());
-        }
-
-        // Italic
-        if (fmt.Italic)
-        {
-            props.Append(new Italic());
-        }
-
-        // Underline
-        if (fmt.Underline)
-        {
-            var underline = new Underline();
-            if (!string.IsNullOrEmpty(fmt.UnderlineStyle))
-            {
-                underline.Val = fmt.UnderlineStyle switch
-                {
-                    "Single" => UnderlineValues.Single,
-                    "Double" => UnderlineValues.Double,
-                    "Wave" => UnderlineValues.Wave,
-                    "Dotted" => UnderlineValues.Dotted,
-                    "Dash" => UnderlineValues.Dash,
-                    _ => UnderlineValues.Single
-                };
-            }
-            else
-            {
-                underline.Val = UnderlineValues.Single;
-            }
-            props.Append(underline);
-        }
-
-        // Strike
-        if (fmt.Strike)
-        {
-            props.Append(new Strike());
-        }
-        if (fmt.DoubleStrike)
-        {
-            props.Append(new DoubleStrike());
-        }
-
-        // Font
+        // 2. Font (rFonts) - must come early, after rStyle
         if (fmt.FontFamily != null || fmt.FontFamilyAscii != null)
         {
             var fonts = new RunFonts();
@@ -1652,23 +1612,61 @@ public class WordDocumentTreeWriter : IDocumentWriter
             props.Append(fonts);
         }
 
-        // Font size
-        if (!string.IsNullOrEmpty(fmt.FontSize))
+        // 3. Bold (b)
+        if (fmt.Bold)
         {
-            props.Append(new FontSize { Val = fmt.FontSize });
-        }
-        if (!string.IsNullOrEmpty(fmt.FontSizeComplexScript))
-        {
-            props.Append(new FontSizeComplexScript { Val = fmt.FontSizeComplexScript });
+            props.Append(new Bold());
         }
 
-        // Color
+        // 4. Italic (i)
+        if (fmt.Italic)
+        {
+            props.Append(new Italic());
+        }
+
+        // 5. Caps
+        if (fmt.AllCaps)
+        {
+            props.Append(new Caps());
+        }
+
+        // 6. SmallCaps
+        if (fmt.SmallCaps)
+        {
+            props.Append(new SmallCaps());
+        }
+
+        // 7. Strike
+        if (fmt.Strike)
+        {
+            props.Append(new Strike());
+        }
+
+        // 8. DoubleStrike (dstrike)
+        if (fmt.DoubleStrike)
+        {
+            props.Append(new DoubleStrike());
+        }
+
+        // 9. Color
         if (!string.IsNullOrEmpty(fmt.Color))
         {
             props.Append(new Color { Val = fmt.Color });
         }
 
-        // Highlight
+        // 10. Font size (sz)
+        if (!string.IsNullOrEmpty(fmt.FontSize))
+        {
+            props.Append(new FontSize { Val = fmt.FontSize });
+        }
+
+        // 11. Font size complex script (szCs)
+        if (!string.IsNullOrEmpty(fmt.FontSizeComplexScript))
+        {
+            props.Append(new FontSizeComplexScript { Val = fmt.FontSizeComplexScript });
+        }
+
+        // 12. Highlight
         if (!string.IsNullOrEmpty(fmt.Highlight))
         {
             var highlightValue = fmt.Highlight switch
@@ -1696,7 +1694,36 @@ public class WordDocumentTreeWriter : IDocumentWriter
             }
         }
 
-        // Superscript/Subscript
+        // 13. Underline (u)
+        if (fmt.Underline)
+        {
+            var underline = new Underline();
+            if (!string.IsNullOrEmpty(fmt.UnderlineStyle))
+            {
+                underline.Val = fmt.UnderlineStyle switch
+                {
+                    "Single" => UnderlineValues.Single,
+                    "Double" => UnderlineValues.Double,
+                    "Wave" => UnderlineValues.Wave,
+                    "Dotted" => UnderlineValues.Dotted,
+                    "Dash" => UnderlineValues.Dash,
+                    _ => UnderlineValues.Single
+                };
+            }
+            else
+            {
+                underline.Val = UnderlineValues.Single;
+            }
+            props.Append(underline);
+        }
+
+        // 14. Shading (shd)
+        if (!string.IsNullOrEmpty(fmt.Shading))
+        {
+            props.Append(new Shading { Fill = fmt.Shading });
+        }
+
+        // 15. Superscript/Subscript (vertAlign) - must come near the end
         if (fmt.Superscript)
         {
             props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Superscript });
@@ -1704,22 +1731,6 @@ public class WordDocumentTreeWriter : IDocumentWriter
         else if (fmt.Subscript)
         {
             props.Append(new VerticalTextAlignment { Val = VerticalPositionValues.Subscript });
-        }
-
-        // Caps
-        if (fmt.SmallCaps)
-        {
-            props.Append(new SmallCaps());
-        }
-        if (fmt.AllCaps)
-        {
-            props.Append(new Caps());
-        }
-
-        // Shading
-        if (!string.IsNullOrEmpty(fmt.Shading))
-        {
-            props.Append(new Shading { Fill = fmt.Shading });
         }
 
         return props;
@@ -2098,7 +2109,9 @@ public class WordDocumentTreeWriter : IDocumentWriter
     }
 
     /// <summary>
-    /// Creates table cell properties from formatting
+    /// Creates table cell properties from formatting.
+    /// Elements are added in the correct OOXML sequence order:
+    /// tcW, gridSpan, vMerge, tcBorders, shd, noWrap, vAlign
     /// </summary>
     private TableCellProperties CreateTableCellProperties(TableCellFormatting? fmt)
     {
@@ -2106,7 +2119,7 @@ public class WordDocumentTreeWriter : IDocumentWriter
 
         if (fmt != null)
         {
-            // Width
+            // 1. Width (tcW)
             if (!string.IsNullOrEmpty(fmt.Width))
             {
                 var widthType = fmt.WidthType switch
@@ -2119,13 +2132,13 @@ public class WordDocumentTreeWriter : IDocumentWriter
                 props.Append(new TableCellWidth { Width = fmt.Width, Type = widthType });
             }
 
-            // Grid span
+            // 2. Grid span
             if (fmt.GridSpan > 1)
             {
                 props.Append(new GridSpan { Val = fmt.GridSpan });
             }
 
-            // Vertical merge
+            // 3. Vertical merge (vMerge)
             if (!string.IsNullOrEmpty(fmt.VerticalMerge))
             {
                 var vMerge = new VerticalMerge();
@@ -2136,23 +2149,18 @@ public class WordDocumentTreeWriter : IDocumentWriter
                 props.Append(vMerge);
             }
 
-            // Vertical alignment
-            if (!string.IsNullOrEmpty(fmt.VerticalAlignment))
+            // 4. Borders (tcBorders) - must come before shading
+            if (fmt.TopBorder != null || fmt.BottomBorder != null || fmt.LeftBorder != null || fmt.RightBorder != null)
             {
-                var vAlign = fmt.VerticalAlignment switch
-                {
-                    "Top" => TableVerticalAlignmentValues.Top,
-                    "Center" => TableVerticalAlignmentValues.Center,
-                    "Bottom" => TableVerticalAlignmentValues.Bottom,
-                    _ => (TableVerticalAlignmentValues?)null
-                };
-                if (vAlign.HasValue)
-                {
-                    props.Append(new TableCellVerticalAlignment { Val = vAlign.Value });
-                }
+                var borders = new TableCellBorders();
+                if (fmt.TopBorder != null) borders.Append(CreateBorder<TopBorder>(fmt.TopBorder));
+                if (fmt.BottomBorder != null) borders.Append(CreateBorder<BottomBorder>(fmt.BottomBorder));
+                if (fmt.LeftBorder != null) borders.Append(CreateBorder<LeftBorder>(fmt.LeftBorder));
+                if (fmt.RightBorder != null) borders.Append(CreateBorder<RightBorder>(fmt.RightBorder));
+                props.Append(borders);
             }
 
-            // Shading
+            // 5. Shading (shd) - must come after borders, before noWrap
             if (!string.IsNullOrEmpty(fmt.ShadingFill))
             {
                 var shading = new Shading { Fill = fmt.ShadingFill };
@@ -2172,21 +2180,26 @@ public class WordDocumentTreeWriter : IDocumentWriter
                 props.Append(shading);
             }
 
-            // Borders
-            if (fmt.TopBorder != null || fmt.BottomBorder != null || fmt.LeftBorder != null || fmt.RightBorder != null)
-            {
-                var borders = new TableCellBorders();
-                if (fmt.TopBorder != null) borders.Append(CreateBorder<TopBorder>(fmt.TopBorder));
-                if (fmt.BottomBorder != null) borders.Append(CreateBorder<BottomBorder>(fmt.BottomBorder));
-                if (fmt.LeftBorder != null) borders.Append(CreateBorder<LeftBorder>(fmt.LeftBorder));
-                if (fmt.RightBorder != null) borders.Append(CreateBorder<RightBorder>(fmt.RightBorder));
-                props.Append(borders);
-            }
-
-            // No wrap
+            // 6. No wrap - must come before vAlign
             if (fmt.NoWrap)
             {
                 props.Append(new NoWrap());
+            }
+
+            // 7. Vertical alignment (vAlign) - must come near the end
+            if (!string.IsNullOrEmpty(fmt.VerticalAlignment))
+            {
+                var vAlign = fmt.VerticalAlignment switch
+                {
+                    "Top" => TableVerticalAlignmentValues.Top,
+                    "Center" => TableVerticalAlignmentValues.Center,
+                    "Bottom" => TableVerticalAlignmentValues.Bottom,
+                    _ => (TableVerticalAlignmentValues?)null
+                };
+                if (vAlign.HasValue)
+                {
+                    props.Append(new TableCellVerticalAlignment { Val = vAlign.Value });
+                }
             }
         }
 
@@ -2253,19 +2266,36 @@ public class WordDocumentTreeWriter : IDocumentWriter
 
     /// <summary>
     /// Applies cell-level formatting modifications to an XML table cell.
+    /// Note: Borders are NOT modified here to preserve original XML element ordering.
+    /// Border modifications should be done through explicit extension methods that set BordersModified flag.
     /// </summary>
     private void ApplyCellFormatting(DocumentFormat.OpenXml.Wordprocessing.TableCell xmlCell, Models.Tables.TableCell dataCell)
     {
         if (dataCell.Formatting == null) return;
 
+        // NOTE: We intentionally do NOT process borders here.
+        // The original XML already contains correctly-ordered border elements.
+        // Modifying them would require careful handling of OOXML element ordering
+        // (top, left/start, bottom, right/end, insideH, insideV) which is complex
+        // and can cause validation errors. For now, borders are preserved as-is
+        // from the original table XML.
+
+        // Only process shading and vertical alignment which don't have ordering issues
+
         var cellProps = xmlCell.GetFirstChild<TableCellProperties>();
         if (cellProps == null)
         {
+            // If there's no cell properties and nothing to modify, just return
+            if (string.IsNullOrEmpty(dataCell.Formatting.ShadingFill) &&
+                string.IsNullOrEmpty(dataCell.Formatting.VerticalAlignment))
+            {
+                return;
+            }
             cellProps = new TableCellProperties();
             xmlCell.InsertAt(cellProps, 0);
         }
 
-        // Update shading
+        // Update shading (shd) - only if explicitly set
         if (!string.IsNullOrEmpty(dataCell.Formatting.ShadingFill))
         {
             var existingShading = cellProps.GetFirstChild<Shading>();
@@ -2275,15 +2305,16 @@ public class WordDocumentTreeWriter : IDocumentWriter
             }
             else
             {
-                cellProps.Append(new Shading
+                var newShading = new Shading
                 {
                     Fill = dataCell.Formatting.ShadingFill,
                     Val = ShadingPatternValues.Clear
-                });
+                };
+                InsertTableCellPropertyInOrder(cellProps, newShading);
             }
         }
 
-        // Update vertical alignment
+        // Update vertical alignment (vAlign) - must come near the end
         if (!string.IsNullOrEmpty(dataCell.Formatting.VerticalAlignment))
         {
             var vAlign = dataCell.Formatting.VerticalAlignment.ToLowerInvariant() switch
@@ -2302,52 +2333,64 @@ public class WordDocumentTreeWriter : IDocumentWriter
                 }
                 else
                 {
-                    cellProps.Append(new TableCellVerticalAlignment { Val = vAlign.Value });
+                    var newAlign = new TableCellVerticalAlignment { Val = vAlign.Value };
+                    InsertTableCellPropertyInOrder(cellProps, newAlign);
                 }
-            }
-        }
-
-        // Update borders
-        if (dataCell.Formatting.TopBorder != null || dataCell.Formatting.BottomBorder != null ||
-            dataCell.Formatting.LeftBorder != null || dataCell.Formatting.RightBorder != null)
-        {
-            var existingBorders = cellProps.GetFirstChild<TableCellBorders>();
-            if (existingBorders == null)
-            {
-                existingBorders = new TableCellBorders();
-                cellProps.Append(existingBorders);
-            }
-
-            if (dataCell.Formatting.TopBorder != null)
-            {
-                var existing = existingBorders.GetFirstChild<TopBorder>();
-                existing?.Remove();
-                existingBorders.Append(CreateBorder<TopBorder>(dataCell.Formatting.TopBorder));
-            }
-            if (dataCell.Formatting.BottomBorder != null)
-            {
-                var existing = existingBorders.GetFirstChild<BottomBorder>();
-                existing?.Remove();
-                existingBorders.Append(CreateBorder<BottomBorder>(dataCell.Formatting.BottomBorder));
-            }
-            if (dataCell.Formatting.LeftBorder != null)
-            {
-                var existing = existingBorders.GetFirstChild<LeftBorder>();
-                existing?.Remove();
-                existingBorders.Append(CreateBorder<LeftBorder>(dataCell.Formatting.LeftBorder));
-            }
-            if (dataCell.Formatting.RightBorder != null)
-            {
-                var existing = existingBorders.GetFirstChild<RightBorder>();
-                existing?.Remove();
-                existingBorders.Append(CreateBorder<RightBorder>(dataCell.Formatting.RightBorder));
             }
         }
     }
 
     /// <summary>
+    /// Inserts a child element into TableCellProperties at the correct OOXML sequence position.
+    /// OOXML order: cnfStyle, tcW, gridSpan, hMerge, vMerge, tcBorders, shd, noWrap, tcMar, textDirection, tcFitText, vAlign, hideMark
+    /// </summary>
+    private static void InsertTableCellPropertyInOrder(TableCellProperties cellProps, OpenXmlElement newElement)
+    {
+        // Define the correct order of tcPr child elements
+        var elementOrder = new[]
+        {
+            typeof(ConditionalFormatStyle),     // cnfStyle
+            typeof(TableCellWidth),              // tcW
+            typeof(GridSpan),                    // gridSpan
+            typeof(HorizontalMerge),             // hMerge
+            typeof(VerticalMerge),               // vMerge
+            typeof(TableCellBorders),            // tcBorders
+            typeof(Shading),                     // shd
+            typeof(NoWrap),                      // noWrap
+            typeof(TableCellMargin),             // tcMar
+            typeof(TextDirection),               // textDirection
+            typeof(TableCellFitText),            // tcFitText
+            typeof(TableCellVerticalAlignment),  // vAlign
+            typeof(HideMark)                     // hideMark
+        };
+
+        var newElementIndex = Array.IndexOf(elementOrder, newElement.GetType());
+        if (newElementIndex < 0)
+        {
+            // Unknown element type, append at the end
+            cellProps.Append(newElement);
+            return;
+        }
+
+        // Find the first element that should come after the new element
+        foreach (var child in cellProps.ChildElements)
+        {
+            var childIndex = Array.IndexOf(elementOrder, child.GetType());
+            if (childIndex > newElementIndex)
+            {
+                // Insert before this child
+                child.InsertBeforeSelf(newElement);
+                return;
+            }
+        }
+
+        // No element found that should come after, so append at the end
+        cellProps.Append(newElement);
+    }
+
+    /// <summary>
     /// Applies text changes from cell content nodes to the XML cell.
-    /// Also handles nested tables recursively.
+    /// Also handles nested tables recursively and font formatting.
     /// </summary>
     private void ApplyCellTextChanges(DocumentFormat.OpenXml.Wordprocessing.TableCell xmlCell, Models.Tables.TableCell dataCell)
     {
@@ -2380,41 +2423,187 @@ public class WordDocumentTreeWriter : IDocumentWriter
             {
                 var xmlPara = xmlParagraphs[paraIndex];
 
-                // Get all text elements in this paragraph
-                var textElements = xmlPara.Descendants<Text>().ToList();
-                if (textElements.Count > 0 && !string.IsNullOrEmpty(contentNode.Text))
+                // If the content node has formatted runs with font changes, update existing runs
+                if (contentNode.HasFormattedRuns)
                 {
-                    // For simple cases, update the first text element
-                    // and clear others if the text was replaced
-                    var firstText = textElements[0];
-                    var originalCombinedText = string.Join("", textElements.Select(t => t.Text));
-
-                    if (contentNode.Text != originalCombinedText)
+                    // Update font properties on existing runs instead of rebuilding
+                    // This preserves the original XML structure (bookmarks, fields, etc.)
+                    ApplyFontToExistingRuns(xmlPara, contentNode.Runs);
+                }
+                else
+                {
+                    // Handle simple text changes (no formatting)
+                    var textElements = xmlPara.Descendants<Text>().ToList();
+                    if (textElements.Count > 0 && !string.IsNullOrEmpty(contentNode.Text))
                     {
-                        firstText.Text = contentNode.Text;
-                        firstText.Space = SpaceProcessingModeValues.Preserve;
+                        var firstText = textElements[0];
+                        var originalCombinedText = string.Join("", textElements.Select(t => t.Text));
 
-                        // Clear other text elements since we've set all text in the first one
-                        for (var i = 1; i < textElements.Count; i++)
+                        if (contentNode.Text != originalCombinedText)
                         {
-                            textElements[i].Text = "";
+                            firstText.Text = contentNode.Text;
+                            firstText.Space = SpaceProcessingModeValues.Preserve;
+
+                            for (var i = 1; i < textElements.Count; i++)
+                            {
+                                textElements[i].Text = "";
+                            }
                         }
                     }
-                }
-                else if (textElements.Count == 0 && !string.IsNullOrEmpty(contentNode.Text))
-                {
-                    // No text elements exist, add a new run with text
-                    var run = xmlPara.GetFirstChild<Run>();
-                    if (run == null)
+                    else if (textElements.Count == 0 && !string.IsNullOrEmpty(contentNode.Text))
                     {
-                        run = new Run();
-                        xmlPara.Append(run);
+                        var run = xmlPara.GetFirstChild<Run>();
+                        if (run == null)
+                        {
+                            run = new Run();
+                            xmlPara.Append(run);
+                        }
+                        run.Append(new Text(contentNode.Text) { Space = SpaceProcessingModeValues.Preserve });
                     }
-                    run.Append(new Text(contentNode.Text) { Space = SpaceProcessingModeValues.Preserve });
                 }
             }
             paraIndex++;
         }
+    }
+
+    /// <summary>
+    /// Applies font formatting from formatted runs to existing XML runs.
+    /// This preserves the original XML structure while updating font properties.
+    /// </summary>
+    private void ApplyFontToExistingRuns(Paragraph xmlPara, List<Models.Formatting.FormattedRun> formattedRuns)
+    {
+        var xmlRuns = xmlPara.Elements<Run>().ToList();
+
+        // If there are no XML runs but we have formatted runs, we need to create them
+        if (xmlRuns.Count == 0 && formattedRuns.Count > 0)
+        {
+            foreach (var formattedRun in formattedRuns)
+            {
+                xmlPara.Append(CreateRun(formattedRun));
+            }
+            return;
+        }
+
+        // Get the primary font from formatted runs (use the first run with a font set)
+        string? primaryFont = null;
+        foreach (var frun in formattedRuns)
+        {
+            var font = frun.Formatting?.FontFamilyAscii ?? frun.Formatting?.FontFamily;
+            if (!string.IsNullOrEmpty(font))
+            {
+                primaryFont = font;
+                break;
+            }
+        }
+
+        if (string.IsNullOrEmpty(primaryFont))
+            return;
+
+        // Apply font to all existing runs
+        foreach (var xmlRun in xmlRuns)
+        {
+            var runProps = xmlRun.GetFirstChild<RunProperties>();
+            if (runProps == null)
+            {
+                runProps = new RunProperties();
+                xmlRun.InsertAt(runProps, 0);
+            }
+
+            // Update or add RunFonts
+            var existingFonts = runProps.GetFirstChild<RunFonts>();
+            if (existingFonts != null)
+            {
+                existingFonts.Ascii = primaryFont;
+                existingFonts.HighAnsi = primaryFont;
+                existingFonts.EastAsia = primaryFont;
+                existingFonts.ComplexScript = primaryFont;
+            }
+            else
+            {
+                var newFonts = new RunFonts
+                {
+                    Ascii = primaryFont,
+                    HighAnsi = primaryFont,
+                    EastAsia = primaryFont,
+                    ComplexScript = primaryFont
+                };
+                // Insert RunFonts at the correct position (after rStyle, near the beginning)
+                InsertRunPropertyInOrder(runProps, newFonts);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inserts a child element into RunProperties at the correct OOXML sequence position.
+    /// OOXML order: rStyle, rFonts, b, bCs, i, iCs, caps, smallCaps, strike, dstrike, ...
+    /// </summary>
+    private static void InsertRunPropertyInOrder(RunProperties runProps, OpenXmlElement newElement)
+    {
+        // Define the correct order of rPr child elements (partial list of common elements)
+        var elementOrder = new[]
+        {
+            typeof(RunStyle),           // rStyle
+            typeof(RunFonts),           // rFonts
+            typeof(Bold),               // b
+            typeof(BoldComplexScript),  // bCs
+            typeof(Italic),             // i
+            typeof(ItalicComplexScript),// iCs
+            typeof(Caps),               // caps
+            typeof(SmallCaps),          // smallCaps
+            typeof(Strike),             // strike
+            typeof(DoubleStrike),       // dstrike
+            typeof(Outline),            // outline
+            typeof(Shadow),             // shadow
+            typeof(Emboss),             // emboss
+            typeof(Imprint),            // imprint
+            typeof(NoProof),            // noProof
+            typeof(SnapToGrid),         // snapToGrid
+            typeof(Vanish),             // vanish
+            typeof(WebHidden),          // webHidden
+            typeof(Color),              // color
+            typeof(Spacing),            // spacing
+            typeof(CharacterScale),     // w
+            typeof(Kern),               // kern
+            typeof(Position),           // position
+            typeof(FontSize),           // sz
+            typeof(FontSizeComplexScript), // szCs
+            typeof(Highlight),          // highlight
+            typeof(Underline),          // u
+            typeof(TextEffect),         // effect
+            typeof(Border),             // bdr
+            typeof(Shading),            // shd
+            typeof(FitText),            // fitText
+            typeof(VerticalTextAlignment), // vertAlign
+            typeof(RightToLeftText),    // rtl
+            typeof(ComplexScript),      // cs
+            typeof(Emphasis),           // em
+            typeof(Languages),          // lang
+            typeof(EastAsianLayout),    // eastAsianLayout
+            typeof(SpecVanish)          // specVanish
+        };
+
+        var newElementIndex = Array.IndexOf(elementOrder, newElement.GetType());
+        if (newElementIndex < 0)
+        {
+            // Unknown element type, append at the end
+            runProps.Append(newElement);
+            return;
+        }
+
+        // Find the first element that should come after the new element
+        foreach (var child in runProps.ChildElements)
+        {
+            var childIndex = Array.IndexOf(elementOrder, child.GetType());
+            if (childIndex > newElementIndex)
+            {
+                // Insert before this child
+                child.InsertBeforeSelf(newElement);
+                return;
+            }
+        }
+
+        // No element found that should come after, so append at the end
+        runProps.Append(newElement);
     }
 
     /// <summary>

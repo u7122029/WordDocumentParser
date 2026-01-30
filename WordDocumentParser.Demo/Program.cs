@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using WordDocumentParser.Demo.Features.ContentControls;
 using WordDocumentParser.Demo.Features.DocumentCreation;
 using WordDocumentParser.Demo.Features.DocumentProperties;
@@ -8,6 +9,7 @@ using WordDocumentParser.Demo.Features.Parsing;
 using WordDocumentParser.Demo.Features.RoundTrip;
 using WordDocumentParser.Demo.Features.Styles;
 using WordDocumentParser.Demo.Features.Tables;
+using WordDocumentParser.Demo.Features.Fonts;
 
 namespace WordDocumentParser.Demo;
 
@@ -19,7 +21,7 @@ class Program
     static void Main(string[] args)
     {
         // Example usage with a file path
-        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\inner_table_testing.docx";
+        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\minutes.docx";
 
         if (File.Exists(filePath))
         {
@@ -51,9 +53,14 @@ class Program
             // RoundTripDemo.Run(filePath);
 
             // Demo: Table parsing and manipulation
-            Console.WriteLine("\n\nTable Parsing Demo:");
-            Console.WriteLine("===================");
-            TableParsing.Run(filePath);
+            // Console.WriteLine("\n\nTable Parsing Demo:");
+            // Console.WriteLine("===================");
+            // TableParsing.Run(filePath);
+
+            // Demo: Font manipulation
+            Console.WriteLine("\n\nFont Manipulation Demo:");
+            Console.WriteLine("=======================");
+            FontDemo.Run(filePath);
         }
         else
         {
