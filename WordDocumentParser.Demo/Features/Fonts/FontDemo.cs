@@ -207,6 +207,7 @@ public static class FontDemo
             Path.GetDirectoryName(inputPath)!,
             Path.GetFileNameWithoutExtension(inputPath) + "_fonts_modified.docx");
 
+        
         Console.WriteLine($"\n9. Saving modified document to: {outputPath}");
         doc.SaveToFile(outputPath);
 

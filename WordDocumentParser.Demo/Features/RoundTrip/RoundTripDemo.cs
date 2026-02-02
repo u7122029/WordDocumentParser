@@ -14,8 +14,8 @@ public static class RoundTripDemo
         using var parser = new WordDocumentTreeParser();
         var documentTree = parser.ParseFromFile(inputPath);
 
-        var outputPath = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(inputPath)!,
-            System.IO.Path.GetFileNameWithoutExtension(inputPath) + "_copy.docx");
+        var outputPath = Path.Combine(System.IO.Path.GetDirectoryName(inputPath)!,
+        System.IO.Path.GetFileNameWithoutExtension(inputPath) + "_copy.docx");
 
         documentTree.SaveToFile(outputPath);
         Console.WriteLine($"Document saved to: {outputPath}");

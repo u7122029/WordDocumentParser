@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using WordDocumentParser.Demo.Features.Concatenation;
 using WordDocumentParser.Demo.Features.ContentControls;
 using WordDocumentParser.Demo.Features.DocumentCreation;
 using WordDocumentParser.Demo.Features.DocumentProperties;
@@ -20,51 +21,33 @@ class Program
 {
     static void Main(string[] args)
     {
-        // Example usage with a file path
-        string filePath = args.Length > 0 ? args[0] : "C:\\isolated\\minutes.docx";
+        // Demo: Document Concatenation and Section Insertion
+        string firstDoc = @"C:\isolated\sgp.docx";
+        string secondDoc = @"C:\isolated\action_guide.docx";
 
-        if (File.Exists(filePath))
+        if (File.Exists(firstDoc) && File.Exists(secondDoc))
         {
-            // Demo: Paragraph Style Modification
-            //Console.WriteLine("\n\nParagraph Style Demo:");
-            //Console.WriteLine("=====================");
-            //ParagraphStyleDemo.Run(filePath);
+            // Demo 1: Full document concatenation
+            Console.WriteLine("\n\nDocument Concatenation Demo:");
+            Console.WriteLine("============================");
+            DocumentConcatenationDemo.Run(firstDoc, secondDoc);
 
-            // DocumentStructureDemo.Run(filePath);
+            // Demo 2: Section insertion (copy-paste style)
+            Console.WriteLine("\n\n");
+            DocumentConcatenationDemo.RunSectionInsertion(firstDoc, secondDoc);
 
-            // // Demo: Content Controls - Read and Modify
-            // Console.WriteLine("\n\nContent Control Demo:");
-            // Console.WriteLine("=====================");
-            // ContentControlsDemo.Run(filePath);
-            //
-            // // Demo: Removing Content Controls and Document Properties
-            // Console.WriteLine("\n\nRemoving Content Controls Demo:");
-            // Console.WriteLine("================================");
-            // ContentControlRemovalDemo.Run(filePath);
-
-            // Demo: Add, change, and remove a document property
-            // Console.WriteLine("\n\nDocument Property Demo:");
-            // Console.WriteLine("=======================");
-            // DocumentPropertyDemo.Run(filePath);
-
-            // Demo: Write the parsed document back to a new file
-            // Console.WriteLine("\n\nWriting Document Demo:");
-            // Console.WriteLine("======================");
-            // RoundTripDemo.Run(filePath);
-
-            // Demo: Table parsing and manipulation
-            // Console.WriteLine("\n\nTable Parsing Demo:");
-            // Console.WriteLine("===================");
-            // TableParsing.Run(filePath);
-
-            // Demo: Font manipulation
-            Console.WriteLine("\n\nFont Manipulation Demo:");
-            Console.WriteLine("=======================");
-            FontDemo.Run(filePath);
+            // Demo 3: Extract and insert specific nodes (tables)
+            Console.WriteLine("\n\n");
+            DocumentConcatenationDemo.RunNodeExtraction(firstDoc, secondDoc);
         }
         else
         {
-            Console.WriteLine("Word Document Tree Parser & Writer - Usage Examples");
+            if (!File.Exists(firstDoc))
+                Console.WriteLine($"First document not found: {firstDoc}");
+            if (!File.Exists(secondDoc))
+                Console.WriteLine($"Second document not found: {secondDoc}");
+
+            Console.WriteLine("\nWord Document Tree Parser & Writer - Usage Examples");
             Console.WriteLine("===================================================\n");
 
             // Show example code
