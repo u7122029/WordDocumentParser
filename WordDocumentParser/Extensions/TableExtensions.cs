@@ -245,6 +245,41 @@ public static class TableExtensions
     }
 
     /// <summary>
+    /// Removes the first occurrence of the specified text from a cell's content.
+    /// Searches through all paragraph nodes in the cell.
+    /// </summary>
+    /// <param name="cell">The cell to modify</param>
+    /// <param name="textToRemove">The text to remove</param>
+    /// <returns>True if text was found and removed, false otherwise</returns>
+    public static bool RemoveText(this TableCell cell, string textToRemove)
+    {
+        foreach (var content in cell.Content)
+        {
+            if (content.Type is not (ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
+                continue;
+
+            if (!content.Text.Contains(textToRemove))
+                continue;
+
+            var oldText = content.Text;
+            content.Text = content.Text.Replace(textToRemove, "");
+
+            // Clear runs since we're modifying plain text
+            content.Runs.Clear();
+
+            // Update OriginalXml if present
+            if (!string.IsNullOrEmpty(content.OriginalXml))
+            {
+                content.OriginalXml = UpdateTextInXml(content.OriginalXml, oldText, content.Text);
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Clears all content from a cell.
     /// </summary>
     /// <param name="cell">The cell to clear</param>
@@ -336,6 +371,127 @@ public static class TableExtensions
     }
 
     /// <summary>
+    /// Adds a new row to the end of the table.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="cellTexts">Text content for each cell in the new row. If fewer values are provided than columns, remaining cells will be empty.</param>
+    /// <returns>The newly created row, or null if the table node is invalid</returns>
+    public static TableRow? AddRow(this DocumentNode tableNode, params string[] cellTexts)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null) return null;
+
+        var newRowIndex = tableData.RowCount;
+        var colCount = tableData.ColumnCount;
+
+        var newRow = new TableRow
+        {
+            RowIndex = newRowIndex,
+            Cells = []
+        };
+
+        for (var col = 0; col < colCount; col++)
+        {
+            var text = col < cellTexts.Length ? cellTexts[col] : string.Empty;
+            var cell = new TableCell
+            {
+                RowIndex = newRowIndex,
+                ColumnIndex = col,
+                Content = [new DocumentNode(ContentType.Paragraph, text)]
+            };
+            newRow.Cells.Add(cell);
+        }
+
+        tableData.Rows.Add(newRow);
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return newRow;
+    }
+
+    /// <summary>
+    /// Inserts a new row at the specified index, shifting existing rows down.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="rowIndex">Zero-based index at which to insert the row. Must be between 0 and RowCount (inclusive).</param>
+    /// <param name="cellTexts">Text content for each cell in the new row. If fewer values are provided than columns, remaining cells will be empty.</param>
+    /// <returns>The newly created row, or null if the table node is invalid or the index is out of range</returns>
+    public static TableRow? InsertRow(this DocumentNode tableNode, int rowIndex, params string[] cellTexts)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null || rowIndex < 0 || rowIndex > tableData.RowCount)
+            return null;
+
+        var colCount = tableData.ColumnCount;
+
+        var newRow = new TableRow
+        {
+            RowIndex = rowIndex,
+            Cells = []
+        };
+
+        for (var col = 0; col < colCount; col++)
+        {
+            var text = col < cellTexts.Length ? cellTexts[col] : string.Empty;
+            var cell = new TableCell
+            {
+                RowIndex = rowIndex,
+                ColumnIndex = col,
+                Content = [new DocumentNode(ContentType.Paragraph, text)]
+            };
+            newRow.Cells.Add(cell);
+        }
+
+        tableData.Rows.Insert(rowIndex, newRow);
+
+        // Re-index rows after the insertion point
+        for (var i = rowIndex + 1; i < tableData.Rows.Count; i++)
+        {
+            tableData.Rows[i].RowIndex = i;
+            foreach (var cell in tableData.Rows[i].Cells)
+            {
+                cell.RowIndex = i;
+            }
+        }
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return newRow;
+    }
+
+    /// <summary>
+    /// Removes a row from the table at the specified index.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="rowIndex">Zero-based row index of the row to remove</param>
+    /// <returns>True if the row was removed, false if not found</returns>
+    public static bool RemoveRow(this DocumentNode tableNode, int rowIndex)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null || rowIndex < 0 || rowIndex >= tableData.RowCount)
+            return false;
+
+        tableData.Rows.RemoveAt(rowIndex);
+
+        // Re-index remaining rows and their cells
+        for (var i = rowIndex; i < tableData.Rows.Count; i++)
+        {
+            tableData.Rows[i].RowIndex = i;
+            foreach (var cell in tableData.Rows[i].Cells)
+            {
+                cell.RowIndex = i;
+            }
+        }
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return true;
+    }
+
+    /// <summary>
     /// Sets the header flag on a row (headers repeat on page breaks).
     /// </summary>
     /// <param name="row">The row to modify</param>
@@ -358,6 +514,122 @@ public static class TableExtensions
         {
             cell.SetShading(fillColor);
         }
+    }
+
+    #endregion
+
+    #region Column operations
+
+    /// <summary>
+    /// Adds a new column to the end of the table.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="cellTexts">Text content for each cell in the new column. If fewer values are provided than rows, remaining cells will be empty.</param>
+    /// <returns>True if the column was added, false if the table node is invalid</returns>
+    public static bool AddColumn(this DocumentNode tableNode, params string[] cellTexts)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null) return false;
+
+        var newColIndex = tableData.ColumnCount;
+        tableData.ColumnCount++;
+
+        for (var row = 0; row < tableData.RowCount; row++)
+        {
+            var text = row < cellTexts.Length ? cellTexts[row] : string.Empty;
+            var cell = new TableCell
+            {
+                RowIndex = row,
+                ColumnIndex = newColIndex,
+                Content = [new DocumentNode(ContentType.Paragraph, text)]
+            };
+            tableData.Rows[row].Cells.Add(cell);
+        }
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Inserts a new column at the specified index, shifting existing columns to the right.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="columnIndex">Zero-based index at which to insert the column. Must be between 0 and ColumnCount (inclusive).</param>
+    /// <param name="cellTexts">Text content for each cell in the new column. If fewer values are provided than rows, remaining cells will be empty.</param>
+    /// <returns>True if the column was inserted, false if the table node is invalid or the index is out of range</returns>
+    public static bool InsertColumn(this DocumentNode tableNode, int columnIndex, params string[] cellTexts)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null || columnIndex < 0 || columnIndex > tableData.ColumnCount)
+            return false;
+
+        // Shift existing cells at or after the insertion point
+        foreach (var row in tableData.Rows)
+        {
+            foreach (var cell in row.Cells.Where(c => c.ColumnIndex >= columnIndex))
+            {
+                cell.ColumnIndex++;
+            }
+        }
+
+        tableData.ColumnCount++;
+
+        // Insert new cells
+        for (var row = 0; row < tableData.RowCount; row++)
+        {
+            var text = row < cellTexts.Length ? cellTexts[row] : string.Empty;
+            var cell = new TableCell
+            {
+                RowIndex = row,
+                ColumnIndex = columnIndex,
+                Content = [new DocumentNode(ContentType.Paragraph, text)]
+            };
+
+            // Insert in sorted position within the row's cell list
+            var insertAt = tableData.Rows[row].Cells.FindIndex(c => c.ColumnIndex > columnIndex);
+            if (insertAt < 0)
+                tableData.Rows[row].Cells.Add(cell);
+            else
+                tableData.Rows[row].Cells.Insert(insertAt, cell);
+        }
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Removes a column from the table at the specified index.
+    /// </summary>
+    /// <param name="tableNode">The table node</param>
+    /// <param name="columnIndex">Zero-based column index of the column to remove</param>
+    /// <returns>True if the column was removed, false if not found</returns>
+    public static bool RemoveColumn(this DocumentNode tableNode, int columnIndex)
+    {
+        var tableData = tableNode.GetTableData();
+        if (tableData is null || columnIndex < 0 || columnIndex >= tableData.ColumnCount)
+            return false;
+
+        foreach (var row in tableData.Rows)
+        {
+            row.Cells.RemoveAll(c => c.ColumnIndex == columnIndex);
+
+            // Re-index remaining cells in this row
+            foreach (var cell in row.Cells.Where(c => c.ColumnIndex > columnIndex))
+            {
+                cell.ColumnIndex--;
+            }
+        }
+
+        tableData.ColumnCount--;
+
+        // Clear OriginalXml so the writer rebuilds the table from TableData
+        tableNode.OriginalXml = null;
+
+        return true;
     }
 
     #endregion

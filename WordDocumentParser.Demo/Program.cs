@@ -21,42 +21,8 @@ class Program
 {
     static void Main(string[] args)
     {
-        // Demo: Document Concatenation and Section Insertion
-        string firstDoc = @"C:\isolated\sgp.docx";
-        string secondDoc = @"C:\isolated\action_guide.docx";
+        string inputDoc = @"C:\isolated\FDE EM SD v3.docx";
 
-        if (File.Exists(firstDoc) && File.Exists(secondDoc))
-        {
-            // Demo 1: Full document concatenation
-            Console.WriteLine("\n\nDocument Concatenation Demo:");
-            Console.WriteLine("============================");
-            DocumentConcatenationDemo.Run(firstDoc, secondDoc);
-
-            // Demo 2: Section insertion (copy-paste style)
-            Console.WriteLine("\n\n");
-            DocumentConcatenationDemo.RunSectionInsertion(firstDoc, secondDoc);
-
-            // Demo 3: Extract and insert specific nodes (tables)
-            Console.WriteLine("\n\n");
-            DocumentConcatenationDemo.RunNodeExtraction(firstDoc, secondDoc);
-        }
-        else
-        {
-            if (!File.Exists(firstDoc))
-                Console.WriteLine($"First document not found: {firstDoc}");
-            if (!File.Exists(secondDoc))
-                Console.WriteLine($"Second document not found: {secondDoc}");
-
-            Console.WriteLine("\nWord Document Tree Parser & Writer - Usage Examples");
-            Console.WriteLine("===================================================\n");
-
-            // Show example code
-            ExampleUsageDemo.Show();
-
-            // Demo: Create a document from scratch
-            Console.WriteLine("\n\nCreating Sample Document:");
-            Console.WriteLine("=========================");
-            DocumentCreationDemo.Run();
-        }
+        TableModificationDemo.Run(inputDoc);
     }
 }
