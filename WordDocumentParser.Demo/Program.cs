@@ -21,7 +21,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        string inputDoc = @"C:\isolated\tb_mod_test.docx";
+        string inputDoc = @"C:\isolated\FDE EM SD v3.docx";
 
         TableModificationDemo.Run(inputDoc);
     }

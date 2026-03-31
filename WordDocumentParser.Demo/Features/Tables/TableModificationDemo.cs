@@ -32,8 +32,9 @@ public static class TableModificationDemo
         {
             if (node.Type != ContentType.Table) return false;
             var data = node.GetCellText(0, 0)!.Trim();
-            return data == "TD Identifier";
+            return data == "Acronym";
         }).First();
+        var originalFirstCellText = table.GetCellText(0, 0)!.Trim();
         var (originalRows, originalCols) = table.GetDimensions();
         Console.WriteLine($"Working with first table: {originalRows} rows x {originalCols} columns");
         Console.WriteLine("\nOriginal table:");
@@ -138,7 +139,7 @@ public static class TableModificationDemo
         {
             if (node.Type != ContentType.Table) return false;
             var text = node.GetCellText(0, 0);
-            return text != null && text.Contains("TD Identifier");
+            return text != null && text.Contains(originalFirstCellText);
         }).First();
         var (verifiedRows, verifiedCols) = verifiedTable.GetDimensions();
         Console.WriteLine($"Verified table: {verifiedRows} rows x {verifiedCols} columns");
