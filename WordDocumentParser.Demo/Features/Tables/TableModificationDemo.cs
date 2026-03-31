@@ -28,11 +28,11 @@ public static class TableModificationDemo
         // }
 
         // var table = tables[0];
-        var table = doc.FindAll( node =>
+        var table = doc.FindAll(node =>
         {
             if (node.Type != ContentType.Table) return false;
             var data = node.GetCellText(0, 0)!.Trim();
-            return data == "Term";
+            return data == "TD Identifier";
         }).First();
         var (originalRows, originalCols) = table.GetDimensions();
         Console.WriteLine($"Working with first table: {originalRows} rows x {originalCols} columns");
@@ -130,11 +130,16 @@ public static class TableModificationDemo
         Console.WriteLine($"\nSaving modified document to: {outputPath}");
         doc.SaveToFile(outputPath);
 
-        // Verify by re-parsing
+        // Verify by re-parsing — find the same table we modified
         Console.WriteLine("\nVerifying saved document...");
         using var verifyParser = new WordDocumentTreeParser();
         var verifiedDoc = verifyParser.ParseFromFile(outputPath);
-        var verifiedTable = verifiedDoc.FindAllTables(includeNested: false).First();
+        var verifiedTable = verifiedDoc.FindAll(node =>
+        {
+            if (node.Type != ContentType.Table) return false;
+            var text = node.GetCellText(0, 0);
+            return text != null && text.Contains("TD Identifier");
+        }).First();
         var (verifiedRows, verifiedCols) = verifiedTable.GetDimensions();
         Console.WriteLine($"Verified table: {verifiedRows} rows x {verifiedCols} columns");
         Console.WriteLine(verifiedTable.ToTextRepresentation());

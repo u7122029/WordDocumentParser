@@ -1,7 +1,9 @@
 using System.Text.RegularExpressions;
+using DocumentFormat.OpenXml;
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
 using WordDocumentParser.Models.Tables;
+using WP = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace WordDocumentParser.Extensions;
 
@@ -404,8 +406,13 @@ public static class TableExtensions
 
         tableData.Rows.Add(newRow);
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to include the new row, preserving table style
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            var lastXmlRow = xmlTable.Elements<WP.TableRow>().LastOrDefault();
+            if (lastXmlRow != null)
+                xmlTable.Append(CloneRowWithTexts(lastXmlRow, cellTexts, colCount));
+        });
 
         return newRow;
     }
@@ -455,8 +462,20 @@ public static class TableExtensions
             }
         }
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to insert the new row at the correct position
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            var xmlRows = xmlTable.Elements<WP.TableRow>().ToList();
+            var templateRow = rowIndex < xmlRows.Count ? xmlRows[rowIndex] : xmlRows.LastOrDefault();
+            if (templateRow != null)
+            {
+                var newXmlRow = CloneRowWithTexts(templateRow, cellTexts, colCount);
+                if (rowIndex < xmlRows.Count)
+                    xmlRows[rowIndex].InsertBeforeSelf(newXmlRow);
+                else
+                    xmlTable.Append(newXmlRow);
+            }
+        });
 
         return newRow;
     }
@@ -485,8 +504,13 @@ public static class TableExtensions
             }
         }
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to remove the row
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            var xmlRows = xmlTable.Elements<WP.TableRow>().ToList();
+            if (rowIndex < xmlRows.Count)
+                xmlRows[rowIndex].Remove();
+        });
 
         return true;
     }
@@ -546,8 +570,20 @@ public static class TableExtensions
             tableData.Rows[row].Cells.Add(cell);
         }
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to add the new column, preserving table style
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            var xmlRows = xmlTable.Elements<WP.TableRow>().ToList();
+            for (var row = 0; row < xmlRows.Count; row++)
+            {
+                var cells = xmlRows[row].Elements<WP.TableCell>().ToList();
+                var templateCell = cells.LastOrDefault();
+                var text = row < cellTexts.Length ? cellTexts[row] : string.Empty;
+                if (templateCell != null)
+                    xmlRows[row].Append(CloneCellWithText(templateCell, text));
+            }
+            AppendGridColumn(xmlTable);
+        });
 
         return true;
     }
@@ -595,8 +631,26 @@ public static class TableExtensions
                 tableData.Rows[row].Cells.Insert(insertAt, cell);
         }
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to insert the new column at the correct position
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            var xmlRows = xmlTable.Elements<WP.TableRow>().ToList();
+            for (var row = 0; row < xmlRows.Count; row++)
+            {
+                var cells = xmlRows[row].Elements<WP.TableCell>().ToList();
+                var text = row < cellTexts.Length ? cellTexts[row] : string.Empty;
+                var templateCell = columnIndex < cells.Count ? cells[columnIndex] : cells.LastOrDefault();
+                if (templateCell != null)
+                {
+                    var newCell = CloneCellWithText(templateCell, text);
+                    if (columnIndex < cells.Count)
+                        cells[columnIndex].InsertBeforeSelf(newCell);
+                    else
+                        xmlRows[row].Append(newCell);
+                }
+            }
+            InsertGridColumnAt(xmlTable, columnIndex);
+        });
 
         return true;
     }
@@ -626,8 +680,17 @@ public static class TableExtensions
 
         tableData.ColumnCount--;
 
-        // Clear OriginalXml so the writer rebuilds the table from TableData
-        tableNode.OriginalXml = null;
+        // Modify OriginalXml to remove the column
+        ApplyXmlStructuralChange(tableNode, xmlTable =>
+        {
+            foreach (var xmlRow in xmlTable.Elements<WP.TableRow>())
+            {
+                var cells = xmlRow.Elements<WP.TableCell>().ToList();
+                if (columnIndex < cells.Count)
+                    cells[columnIndex].Remove();
+            }
+            RemoveGridColumnAt(xmlTable, columnIndex);
+        });
 
         return true;
     }
@@ -800,6 +863,143 @@ public static class TableExtensions
         }
 
         return xml;
+    }
+
+    #endregion
+
+    #region XML structural modification helpers
+
+    /// <summary>
+    /// Parses the table's OriginalXml, applies a structural modification, and stores the result back.
+    /// If OriginalXml is not set, this is a no-op (the writer will build from TableData).
+    /// </summary>
+    private static void ApplyXmlStructuralChange(DocumentNode tableNode, Action<WP.Table> modifier)
+    {
+        if (string.IsNullOrEmpty(tableNode.OriginalXml)) return;
+        var table = new WP.Table(tableNode.OriginalXml);
+        modifier(table);
+        tableNode.OriginalXml = table.OuterXml;
+    }
+
+    /// <summary>
+    /// Clones an XML table row, preserving cell and paragraph formatting but replacing text content.
+    /// </summary>
+    private static WP.TableRow CloneRowWithTexts(WP.TableRow template, string[] cellTexts, int colCount)
+    {
+        var newRow = (WP.TableRow)template.CloneNode(true);
+
+        // Remove header repeat flag from cloned row
+        var rowProps = newRow.GetFirstChild<WP.TableRowProperties>();
+        rowProps?.GetFirstChild<WP.TableHeader>()?.Remove();
+
+        var cells = newRow.Elements<WP.TableCell>().ToList();
+        for (var i = 0; i < cells.Count && i < colCount; i++)
+        {
+            ReplaceCellXmlText(cells[i], i < cellTexts.Length ? cellTexts[i] : string.Empty);
+        }
+
+        return newRow;
+    }
+
+    /// <summary>
+    /// Clones an XML table cell, preserving formatting but replacing text content.
+    /// </summary>
+    private static WP.TableCell CloneCellWithText(WP.TableCell template, string text)
+    {
+        var newCell = (WP.TableCell)template.CloneNode(true);
+        ReplaceCellXmlText(newCell, text);
+        return newCell;
+    }
+
+    /// <summary>
+    /// Replaces text content of an XML cell while preserving paragraph properties and run formatting.
+    /// </summary>
+    private static void ReplaceCellXmlText(WP.TableCell xmlCell, string text)
+    {
+        var paragraphs = xmlCell.Elements<WP.Paragraph>().ToList();
+
+        if (paragraphs.Count > 0)
+        {
+            var firstPara = paragraphs[0];
+
+            // Get run properties from the first run to preserve font/size/bold/etc.
+            var firstRun = firstPara.GetFirstChild<WP.Run>();
+            var runProps = firstRun?.RunProperties;
+
+            // Remove all content except ParagraphProperties
+            foreach (var child in firstPara.ChildElements.ToList())
+            {
+                if (child is not WP.ParagraphProperties)
+                    child.Remove();
+            }
+
+            // Create new run with preserved formatting
+            var newRun = new WP.Run(
+                new WP.Text(text) { Space = SpaceProcessingModeValues.Preserve }
+            );
+            if (runProps != null)
+                newRun.RunProperties = (WP.RunProperties)runProps.CloneNode(true);
+            firstPara.Append(newRun);
+
+            // Remove extra paragraphs
+            for (var i = 1; i < paragraphs.Count; i++)
+                paragraphs[i].Remove();
+        }
+        else
+        {
+            xmlCell.Append(new WP.Paragraph(
+                new WP.Run(
+                    new WP.Text(text) { Space = SpaceProcessingModeValues.Preserve }
+                )
+            ));
+        }
+    }
+
+    /// <summary>
+    /// Appends a grid column to the table grid, cloning the width of the last existing column.
+    /// </summary>
+    private static void AppendGridColumn(WP.Table xmlTable)
+    {
+        var grid = xmlTable.GetFirstChild<WP.TableGrid>();
+        if (grid == null) return;
+        var lastGridCol = grid.Elements<WP.GridColumn>().LastOrDefault();
+        grid.Append(lastGridCol != null
+            ? (WP.GridColumn)lastGridCol.CloneNode(true)
+            : new WP.GridColumn());
+    }
+
+    /// <summary>
+    /// Inserts a grid column at the specified position.
+    /// </summary>
+    private static void InsertGridColumnAt(WP.Table xmlTable, int columnIndex)
+    {
+        var grid = xmlTable.GetFirstChild<WP.TableGrid>();
+        if (grid == null) return;
+        var gridCols = grid.Elements<WP.GridColumn>().ToList();
+        if (columnIndex < gridCols.Count)
+        {
+            gridCols[columnIndex].InsertBeforeSelf(
+                (WP.GridColumn)gridCols[columnIndex].CloneNode(true));
+        }
+        else if (gridCols.Count > 0)
+        {
+            grid.Append((WP.GridColumn)gridCols.Last().CloneNode(true));
+        }
+        else
+        {
+            grid.Append(new WP.GridColumn());
+        }
+    }
+
+    /// <summary>
+    /// Removes a grid column at the specified position.
+    /// </summary>
+    private static void RemoveGridColumnAt(WP.Table xmlTable, int columnIndex)
+    {
+        var grid = xmlTable.GetFirstChild<WP.TableGrid>();
+        var gridCols = grid?.Elements<WP.GridColumn>().ToList();
+        if (gridCols != null && columnIndex < gridCols.Count)
+            gridCols[columnIndex].Remove();
     }
 
     #endregion

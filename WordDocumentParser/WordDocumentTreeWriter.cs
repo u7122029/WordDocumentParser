@@ -2462,6 +2462,34 @@ public class WordDocumentTreeWriter : IDocumentWriter
                     }
                 }
             }
+            else if (!string.IsNullOrEmpty(contentNode.Text))
+            {
+                // Content node has no corresponding XML paragraph — append a new one.
+                // Inherit paragraph and run formatting from the last existing paragraph.
+                var newPara = new Paragraph();
+
+                if (xmlParagraphs.Count > 0)
+                {
+                    var lastPara = xmlParagraphs[^1];
+                    var lastParaProps = lastPara.GetFirstChild<ParagraphProperties>();
+                    if (lastParaProps != null)
+                        newPara.Append((ParagraphProperties)lastParaProps.CloneNode(true));
+
+                    var lastRunProps = lastPara.GetFirstChild<Run>()?.RunProperties;
+                    var newRun = new Run(
+                        new Text(contentNode.Text) { Space = SpaceProcessingModeValues.Preserve });
+                    if (lastRunProps != null)
+                        newRun.RunProperties = (RunProperties)lastRunProps.CloneNode(true);
+                    newPara.Append(newRun);
+                }
+                else
+                {
+                    newPara.Append(new Run(
+                        new Text(contentNode.Text) { Space = SpaceProcessingModeValues.Preserve }));
+                }
+
+                xmlCell.Append(newPara);
+            }
             paraIndex++;
         }
     }
