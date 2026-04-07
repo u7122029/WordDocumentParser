@@ -1,0 +1,24 @@
+- name: Overview
+  href: index.md
+- name: Document Structure
+  href: document-structure.md
+- name: Table Parsing
+  href: table-parsing.md
+- name: Table Modification
+  href: table-modification.md
+- name: Document Creation
+  href: document-creation.md
+- name: Document Concatenation
+  href: document-concatenation.md
+- name: Content Controls
+  href: content-controls.md
+- name: Content Control Removal
+  href: content-control-removal.md
+- name: Document Properties
+  href: document-properties.md
+- name: Paragraph Styles
+  href: paragraph-styles.md
+- name: Fonts
+  href: fonts.md
+- name: Round-Trip
+  href: round-trip.md

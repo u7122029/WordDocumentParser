@@ -1,0 +1,52 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": ["WordDocumentParser/WordDocumentParser.csproj"],
+          "src": ".."
+        }
+      ],
+      "dest": "api",
+      "properties": {
+        "TargetFramework": "net9.0"
+      }
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["api/**.yml", "api/index.md"]
+      },
+      {
+        "files": [
+          "articles/**.md",
+          "articles/**/toc.yml",
+          "demos/**.md",
+          "demos/**/toc.yml",
+          "toc.yml",
+          "*.md"
+        ]
+      }
+    ],
+    "resource": [
+      {
+        "files": ["images/**"]
+      }
+    ],
+    "dest": "../_site",
+    "globalMetadataFiles": [],
+    "fileMetadataFiles": [],
+    "template": ["default", "modern"],
+    "globalMetadata": {
+      "_appName": "WordDocumentParser",
+      "_appTitle": "WordDocumentParser Documentation",
+      "_enableSearch": true,
+      "_appFooter": "WordDocumentParser - MIT License",
+      "_gitContribute": {
+        "repo": "https://github.com/u7122029/WordDocumentParser",
+        "branch": "main"
+      }
+    }
+  }
+}

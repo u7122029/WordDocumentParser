@@ -10,3 +10,6 @@
 **/.*/
 **/*.csx
 **/*.docx
+_site/
+docs/api/**.yml
+docs/api/.manifest
