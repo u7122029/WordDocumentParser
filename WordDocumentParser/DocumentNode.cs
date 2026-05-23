@@ -205,11 +205,11 @@ public class DocumentNode(ContentType type)
     /// <summary>
     /// Pretty prints the tree structure
     /// </summary>
-    public string ToTreeString(int indent = 0)
+    public string ToTreeString(int indent = 0, int previewLength = 30)
     {
         var prefix = new string(' ', indent * 2);
         var typeLabel = Type == ContentType.Heading ? $"H{HeadingLevel}" : Type.ToString();
-        var textPreview = Text.Length > 80 ? $"{Text[..77]}... ({GetTextWithMetadata()[..77]})" : $"{Text} ({GetTextWithMetadata()})";
+        var textPreview = Text.Length > 80 ? $"{Text[..previewLength]}... ({GetTextWithMetadata()[..previewLength]})" : $"{Text} ({GetTextWithMetadata()})";
         var result = $"{prefix}[{typeLabel}][{ParagraphFormatting?.StyleId}] {textPreview}\n";
 
         foreach (var child in Children)
@@ -223,7 +223,17 @@ public class DocumentNode(ContentType type)
     /// <summary>Returns a short string representation of this node.</summary>
     public override string ToString()
     {
+        return ToString(30);
+    }
+    
+    /// <summary>
+    /// Returns a short string representation of this node, with adjustable preview length.
+    /// </summary>
+    /// <param name="previewLength"></param>
+    /// <returns></returns>
+    public string ToString(int previewLength)
+    {
         var typeLabel = Type == ContentType.Heading ? $"Heading{HeadingLevel}" : Type.ToString();
-        return $"{typeLabel}: {(Text.Length > 30 ? $"{Text[..77]}..." : Text)}";
+        return $"{typeLabel}: {(Text.Length > previewLength ? $"{Text[..previewLength]}..." : Text)}";
     }
 }
