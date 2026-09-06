@@ -17,11 +17,17 @@ public static class TreeNavigationExtensions
         => document.Root.FindAll(predicate);
 
     /// <summary>
-    /// Finds all nodes matching a predicate (depth-first traversal).
+    /// Finds all nodes matching a predicate (depth-first traversal of the node tree).
     /// </summary>
     /// <param name="root">Starting node for the search</param>
     /// <param name="predicate">Condition to match</param>
     /// <returns>All matching nodes in document order</returns>
+    /// <remarks>
+    /// This walks <see cref="DocumentNode.Children"/> only. A table's cell content is held by the
+    /// table's model rather than by its children, so it is not visited — use
+    /// <see cref="FindAllContent(DocumentNode, Func{DocumentNode, bool})"/> when the search should
+    /// reach text inside tables.
+    /// </remarks>
     public static IEnumerable<DocumentNode> FindAll(this DocumentNode root, Func<DocumentNode, bool> predicate)
     {
         if (predicate(root))
@@ -30,6 +36,57 @@ public static class TreeNavigationExtensions
         foreach (var child in root.Children)
         {
             foreach (var match in child.FindAll(predicate))
+            {
+                yield return match;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Finds all content nodes matching a predicate, descending into table cells as well as children.
+    /// </summary>
+    /// <param name="document">The Word document to search</param>
+    /// <param name="predicate">Condition to match</param>
+    /// <returns>All matching nodes in document order</returns>
+    public static IEnumerable<DocumentNode> FindAllContent(this WordDocument document, Func<DocumentNode, bool> predicate)
+        => document.Root.FindAllContent(predicate);
+
+    /// <summary>
+    /// Finds all content nodes matching a predicate, descending into table cells as well as children.
+    /// </summary>
+    /// <param name="root">Starting node for the search</param>
+    /// <param name="predicate">Condition to match</param>
+    /// <returns>All matching nodes in document order</returns>
+    /// <remarks>
+    /// This is the traversal document-wide operations should use. Cell content lives on the table's
+    /// model rather than in <see cref="DocumentNode.Children"/>, so anything walking children alone
+    /// silently skips every paragraph inside every table.
+    /// </remarks>
+    public static IEnumerable<DocumentNode> FindAllContent(this DocumentNode root, Func<DocumentNode, bool> predicate)
+    {
+        if (predicate(root))
+            yield return root;
+
+        if (root.Type == ContentType.Table && root.GetTableData() is { } tableData)
+        {
+            foreach (var row in tableData.Rows)
+            {
+                foreach (var cell in row.Cells)
+                {
+                    foreach (var content in cell.Content)
+                    {
+                        foreach (var match in content.FindAllContent(predicate))
+                        {
+                            yield return match;
+                        }
+                    }
+                }
+            }
+        }
+
+        foreach (var child in root.Children)
+        {
+            foreach (var match in child.FindAllContent(predicate))
             {
                 yield return match;
             }

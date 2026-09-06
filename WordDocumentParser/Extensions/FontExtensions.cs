@@ -1,6 +1,5 @@
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
-using WordDocumentParser.Models.Tables;
 
 namespace WordDocumentParser.Extensions;
 
@@ -8,6 +7,11 @@ namespace WordDocumentParser.Extensions;
 /// Extension methods for changing fonts on runs, text spans, and paragraphs.
 /// Note: These methods change the actual font family applied to text, not the paragraph style ID.
 /// </summary>
+/// <remarks>
+/// Font changes are recorded on the runs they apply to. The writer then edits the font of exactly
+/// those runs in the paragraph's original XML, so hyperlinks, fields, bookmarks, and drawings around
+/// the text survive a font change instead of being discarded with the rest of the paragraph.
+/// </remarks>
 public static class FontExtensions
 {
     #region Run-level font changes
@@ -19,12 +23,15 @@ public static class FontExtensions
     /// <param name="fontName">The font family name (e.g., "Calibri", "Arial", "Cascadia Code")</param>
     public static void SetFont(this FormattedRun run, string fontName)
     {
-        run.Formatting ??= new RunFormatting();
         run.Formatting.FontFamily = fontName;
         run.Formatting.FontFamilyAscii = fontName;
         // Also set for other character sets for consistency
         run.Formatting.FontFamilyEastAsia = fontName;
         run.Formatting.FontFamilyComplexScript = fontName;
+
+        // Assigning the same font a run already had is not a change to the value, but it is still an
+        // explicit instruction to write that font, so record it either way.
+        MarkFontChanged(run);
     }
 
     /// <summary>
@@ -37,12 +44,27 @@ public static class FontExtensions
     /// <param name="complexScript">Font for complex scripts like Arabic/Hebrew (optional)</param>
     public static void SetFont(this FormattedRun run, string ascii, string? highAnsi = null, string? eastAsia = null, string? complexScript = null)
     {
-        run.Formatting ??= new RunFormatting();
         run.Formatting.FontFamilyAscii = ascii;
         run.Formatting.FontFamily = highAnsi ?? ascii;
         run.Formatting.FontFamilyEastAsia = eastAsia;
         run.Formatting.FontFamilyComplexScript = complexScript;
+
+        MarkFontChanged(run);
     }
+
+    private static void MarkFontChanged(FormattedRun run)
+    {
+        foreach (var property in RunFormattingFontProperties)
+        {
+            run.Formatting.MarkChanged(property);
+        }
+    }
+
+    private static readonly string[] RunFormattingFontProperties =
+    [
+        nameof(RunFormatting.FontFamily), nameof(RunFormatting.FontFamilyAscii),
+        nameof(RunFormatting.FontFamilyEastAsia), nameof(RunFormatting.FontFamilyComplexScript)
+    ];
 
     /// <summary>
     /// Gets the font family name from a formatted run.
@@ -50,7 +72,7 @@ public static class FontExtensions
     /// <param name="run">The run to check</param>
     /// <returns>The font family name, or null if not set</returns>
     public static string? GetFont(this FormattedRun run)
-        => run.Formatting?.FontFamilyAscii ?? run.Formatting?.FontFamily;
+        => run.Formatting.FontFamilyAscii ?? run.Formatting.FontFamily;
 
     #endregion
 
@@ -62,17 +84,16 @@ public static class FontExtensions
     /// </summary>
     /// <param name="node">The paragraph node to modify</param>
     /// <param name="fontName">The font family name (e.g., "Calibri", "Arial")</param>
-    public static void SetParagraphFont(this DocumentNode node, string fontName)
+    /// <returns>True when the node was a paragraph-like node with text to restyle.</returns>
+    public static bool SetParagraphFont(this DocumentNode node, string fontName)
     {
         if (node.Type is not (ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
-            return;
+            return false;
 
-        // Ensure we have the text content
         var text = node.GetText();
         if (string.IsNullOrEmpty(text) && string.IsNullOrEmpty(node.Text))
-            return;
+            return false;
 
-        // If the node has formatted runs, update each one
         if (node.HasFormattedRuns)
         {
             foreach (var run in node.Runs)
@@ -82,23 +103,17 @@ public static class FontExtensions
         }
         else
         {
-            // Create a formatted run from the plain text with the font applied
-            var textToUse = !string.IsNullOrEmpty(node.Text) ? node.Text : text;
-            var run = new FormattedRun(textToUse);
+            var run = new FormattedRun(!string.IsNullOrEmpty(node.Text) ? node.Text : text);
             run.SetFont(fontName);
             node.Runs.Add(run);
+            node.MarkRunsChanged();
         }
 
-        // Clear OriginalXml so the writer generates clean XML from formatted runs
-        // This is safer than trying to modify XML with regex which can create malformed XML
-        if (!string.IsNullOrEmpty(node.OriginalXml))
-        {
-            node.OriginalXml = null;
-        }
+        return true;
     }
 
     /// <summary>
-    /// Sets the font family for all paragraphs in a document.
+    /// Sets the font family for all paragraphs in a document, including text inside table cells.
     /// </summary>
     /// <param name="document">The document to modify</param>
     /// <param name="fontName">The font family name</param>
@@ -107,18 +122,25 @@ public static class FontExtensions
         => document.Root.SetDocumentFont(fontName);
 
     /// <summary>
-    /// Sets the font family for all paragraphs under a node.
+    /// Sets the font family for all paragraphs under a node, including text inside table cells.
     /// </summary>
     /// <param name="root">The root node to start from</param>
     /// <param name="fontName">The font family name</param>
     /// <returns>The number of paragraphs modified</returns>
+    /// <remarks>
+    /// Table cell content hangs off the table's model rather than off <c>Children</c>, so a traversal
+    /// of the tree alone walks straight past every paragraph inside every table.
+    /// </remarks>
     public static int SetDocumentFont(this DocumentNode root, string fontName)
     {
         var count = 0;
-        foreach (var node in root.FindAll(n => n.Type is ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
+        foreach (var node in root.FindAllContent(n =>
+                     n.Type is ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
         {
-            node.SetParagraphFont(fontName);
-            count++;
+            if (node.SetParagraphFont(fontName))
+            {
+                count++;
+            }
         }
         return count;
     }
@@ -136,6 +158,10 @@ public static class FontExtensions
     /// <param name="fontName">The font family name to apply</param>
     /// <param name="allOccurrences">If true, changes all occurrences; if false, only the first</param>
     /// <returns>The number of occurrences modified</returns>
+    /// <remarks>
+    /// Each match advances the search past the text just restyled. Restyling does not change the
+    /// text, so a search that restarted from the beginning would re-find the same match forever.
+    /// </remarks>
     public static int SetFontForText(this DocumentNode node, string searchText, string fontName, bool allOccurrences = false)
     {
         if (node.Type is not (ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
@@ -144,37 +170,31 @@ public static class FontExtensions
         if (string.IsNullOrEmpty(searchText))
             return 0;
 
-        // Ensure we have formatted runs to work with
-        if (!node.HasFormattedRuns && !string.IsNullOrEmpty(node.Text))
+        EnsureRuns(node);
+
+        var fullText = string.Concat(node.Runs.Select(RunText));
+
+        // Collect every match before touching the runs, then rebuild once. Splitting per match
+        // rebuilt the whole (growing) run collection each time, so the cost grew with the square of
+        // the number of matches.
+        var ranges = new List<(int Start, int Length)>();
+        var searchFrom = 0;
+
+        while (searchFrom <= fullText.Length - searchText.Length)
         {
-            node.Runs.Add(new FormattedRun(node.Text));
+            var index = fullText.IndexOf(searchText, searchFrom, StringComparison.Ordinal);
+            if (index < 0) break;
+
+            ranges.Add((index, searchText.Length));
+            if (!allOccurrences) break;
+
+            searchFrom = index + searchText.Length;
         }
 
-        var count = 0;
-        var modified = true;
+        if (ranges.Count == 0) return 0;
 
-        while (modified)
-        {
-            modified = false;
-            var fullText = string.Concat(node.Runs.Select(r => r.Text));
-            var index = fullText.IndexOf(searchText, StringComparison.Ordinal);
-
-            if (index >= 0)
-            {
-                ApplyFontToRange(node, index, searchText.Length, fontName);
-                count++;
-                modified = allOccurrences;
-            }
-        }
-
-        // Update OriginalXml - for span changes, we need to rebuild or mark as modified
-        if (count > 0 && !string.IsNullOrEmpty(node.OriginalXml))
-        {
-            // Clear OriginalXml so the writer uses the formatted runs instead
-            node.OriginalXml = null;
-        }
-
-        return count;
+        ApplyFontToRanges(node, ranges, fontName);
+        return ranges.Count;
     }
 
     /// <summary>
@@ -193,24 +213,13 @@ public static class FontExtensions
         if (startIndex < 0 || length <= 0)
             return false;
 
-        // Ensure we have formatted runs to work with
-        if (!node.HasFormattedRuns && !string.IsNullOrEmpty(node.Text))
-        {
-            node.Runs.Add(new FormattedRun(node.Text));
-        }
+        EnsureRuns(node);
 
-        var fullText = string.Concat(node.Runs.Select(r => r.Text));
+        var fullText = string.Concat(node.Runs.Select(RunText));
         if (startIndex + length > fullText.Length)
             return false;
 
         ApplyFontToRange(node, startIndex, length, fontName);
-
-        // Clear OriginalXml so the writer uses the formatted runs
-        if (!string.IsNullOrEmpty(node.OriginalXml))
-        {
-            node.OriginalXml = null;
-        }
-
         return true;
     }
 
@@ -233,11 +242,6 @@ public static class FontExtensions
             count++;
         }
 
-        if (count > 0 && !string.IsNullOrEmpty(node.OriginalXml))
-        {
-            node.OriginalXml = null;
-        }
-
         return count;
     }
 
@@ -254,15 +258,12 @@ public static class FontExtensions
     {
         var fonts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        if (node.HasFormattedRuns)
+        foreach (var run in node.Runs)
         {
-            foreach (var run in node.Runs)
+            var font = run.GetFont();
+            if (!string.IsNullOrEmpty(font))
             {
-                var font = run.GetFont();
-                if (!string.IsNullOrEmpty(font))
-                {
-                    fonts.Add(font);
-                }
+                fonts.Add(font);
             }
         }
 
@@ -270,7 +271,7 @@ public static class FontExtensions
     }
 
     /// <summary>
-    /// Gets all unique font families used in a document.
+    /// Gets all unique font families used in a document, including text inside table cells.
     /// </summary>
     /// <param name="document">The document to analyze</param>
     /// <returns>Set of font family names used</returns>
@@ -286,42 +287,16 @@ public static class FontExtensions
     {
         var fonts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var node in root.FindAll(_ => true))
+        foreach (var node in root.FindAllContent(_ => true))
         {
-            // Get fonts from the node itself
-            foreach (var font in node.GetFontsUsed())
-            {
-                fonts.Add(font);
-            }
-
-            // If this is a table, also check cell content
-            if (node.Type == Core.ContentType.Table)
-            {
-                var tableData = node.GetTableData();
-                if (tableData != null)
-                {
-                    foreach (var row in tableData.Rows)
-                    {
-                        foreach (var cell in row.Cells)
-                        {
-                            foreach (var content in cell.Content)
-                            {
-                                foreach (var font in content.GetFontsUsed())
-                                {
-                                    fonts.Add(font);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            fonts.UnionWith(node.GetFontsUsed());
         }
 
         return fonts;
     }
 
     /// <summary>
-    /// Replaces one font with another throughout a document.
+    /// Replaces one font with another throughout a document, including text inside table cells.
     /// </summary>
     /// <param name="document">The document to modify</param>
     /// <param name="fromFont">The font to replace</param>
@@ -331,7 +306,7 @@ public static class FontExtensions
         => document.Root.ReplaceFont(fromFont, toFont);
 
     /// <summary>
-    /// Replaces one font with another under a node.
+    /// Replaces one font with another under a node, including text inside table cells.
     /// </summary>
     /// <param name="root">The root node to start from</param>
     /// <param name="fromFont">The font to replace</param>
@@ -341,24 +316,16 @@ public static class FontExtensions
     {
         var count = 0;
 
-        foreach (var node in root.FindAll(n => n.HasFormattedRuns))
+        foreach (var node in root.FindAllContent(n => n.HasFormattedRuns))
         {
-            var nodeModified = false;
             foreach (var run in node.Runs)
             {
                 var currentFont = run.GetFont();
-                if (currentFont != null && currentFont.Equals(fromFont, StringComparison.OrdinalIgnoreCase))
+                if (currentFont is not null && currentFont.Equals(fromFont, StringComparison.OrdinalIgnoreCase))
                 {
                     run.SetFont(toFont);
                     count++;
-                    nodeModified = true;
                 }
-            }
-
-            // Clear OriginalXml if we made changes so writer generates clean XML
-            if (nodeModified && !string.IsNullOrEmpty(node.OriginalXml))
-            {
-                node.OriginalXml = null;
             }
         }
 
@@ -369,65 +336,108 @@ public static class FontExtensions
 
     #region Private helpers
 
+    private static string RunText(FormattedRun run) => run.IsTab ? "\t" : run.IsBreak ? " " : run.Text;
+
+    private static void EnsureRuns(DocumentNode node)
+    {
+        if (node.HasFormattedRuns || string.IsNullOrEmpty(node.Text)) return;
+
+        node.Runs.Add(new FormattedRun(node.Text));
+        node.MarkRunsChanged();
+    }
+
     /// <summary>
     /// Applies a font to a character range by splitting runs as needed.
     /// </summary>
     private static void ApplyFontToRange(DocumentNode node, int startIndex, int length, string fontName)
+        => ApplyFontToRanges(node, [(startIndex, length)], fontName);
+
+    /// <summary>
+    /// Applies a font to several character ranges in one forward pass over the runs.
+    /// </summary>
+    /// <param name="node">The paragraph node to modify.</param>
+    /// <param name="ranges">Non-overlapping ranges in ascending order.</param>
+    /// <param name="fontName">The font to apply.</param>
+    private static void ApplyFontToRanges(
+        DocumentNode node, List<(int Start, int Length)> ranges, string fontName)
     {
-        var newRuns = new List<FormattedRun>();
-        var currentPos = 0;
-        var endIndex = startIndex + length;
+        var newRuns = new List<FormattedRun>(node.Runs.Count + ranges.Count * 2);
+        var position = 0;
+        var nextRange = 0;
 
         foreach (var run in node.Runs)
         {
-            var runStart = currentPos;
-            var runEnd = currentPos + run.Text.Length;
+            var runText = RunText(run);
+            var runStart = position;
+            var runEnd = position + runText.Length;
+            position = runEnd;
 
-            if (runEnd <= startIndex || runStart >= endIndex)
+            // Ranges that end before this run can no longer apply to anything.
+            while (nextRange < ranges.Count && ranges[nextRange].Start + ranges[nextRange].Length <= runStart)
             {
-                // Run is entirely outside the target range - keep as is
-                newRuns.Add(run);
+                nextRange++;
             }
-            else if (runStart >= startIndex && runEnd <= endIndex)
-            {
-                // Run is entirely inside the target range - apply font
-                run.SetFont(fontName);
-                newRuns.Add(run);
-            }
-            else
-            {
-                // Run partially overlaps - need to split
-                var overlapStart = Math.Max(startIndex, runStart);
-                var overlapEnd = Math.Min(endIndex, runEnd);
 
-                // Part before the overlap
-                if (runStart < overlapStart)
+            // A tab or break carries no splittable text; style it whole when a range covers it.
+            if (run.IsTab || run.IsBreak)
+            {
+                if (nextRange < ranges.Count && ranges[nextRange].Start < runEnd)
                 {
-                    var beforeText = run.Text[..(overlapStart - runStart)];
-                    var beforeRun = new FormattedRun(beforeText, run.Formatting.Clone());
-                    newRuns.Add(beforeRun);
+                    run.SetFont(fontName);
+                }
+                newRuns.Add(run);
+                continue;
+            }
+
+            // Walk the ranges overlapping this run, emitting unstyled and styled slices in order.
+            var cursor = runStart;
+            var styledAnything = false;
+
+            for (var i = nextRange; i < ranges.Count && ranges[i].Start < runEnd; i++)
+            {
+                var (rangeStart, rangeLength) = ranges[i];
+                var overlapStart = Math.Max(rangeStart, cursor);
+                var overlapEnd = Math.Min(rangeStart + rangeLength, runEnd);
+                if (overlapEnd <= overlapStart) continue;
+
+                if (overlapStart > cursor)
+                {
+                    newRuns.Add(run.CloneWithText(runText[(cursor - runStart)..(overlapStart - runStart)]));
                 }
 
-                // The overlapping part with new font
-                var overlapText = run.Text[(overlapStart - runStart)..(overlapEnd - runStart)];
-                var overlapRun = new FormattedRun(overlapText, run.Formatting.Clone());
-                overlapRun.SetFont(fontName);
-                newRuns.Add(overlapRun);
-
-                // Part after the overlap
-                if (runEnd > overlapEnd)
+                // A whole-run match keeps the run itself, so nothing about it can be lost.
+                if (overlapStart == runStart && overlapEnd == runEnd)
                 {
-                    var afterText = run.Text[(overlapEnd - runStart)..];
-                    var afterRun = new FormattedRun(afterText, run.Formatting.Clone());
-                    newRuns.Add(afterRun);
+                    run.SetFont(fontName);
+                    newRuns.Add(run);
                 }
+                else
+                {
+                    var styled = run.CloneWithText(runText[(overlapStart - runStart)..(overlapEnd - runStart)]);
+                    styled.SetFont(fontName);
+                    newRuns.Add(styled);
+                }
+
+                cursor = overlapEnd;
+                styledAnything = true;
             }
 
-            currentPos = runEnd;
+            if (!styledAnything)
+            {
+                // Untouched: keep the original run object rather than a copy.
+                newRuns.Add(run);
+                continue;
+            }
+
+            if (cursor < runEnd)
+            {
+                newRuns.Add(run.CloneWithText(runText[(cursor - runStart)..]));
+            }
         }
 
         node.Runs.Clear();
         node.Runs.AddRange(newRuns);
+        node.MarkRunsChanged();
     }
 
     #endregion

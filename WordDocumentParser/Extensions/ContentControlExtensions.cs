@@ -1,5 +1,7 @@
+using WordDocumentParser.Core;
 using WordDocumentParser.Models.ContentControls;
 using WordDocumentParser.Models.Formatting;
+using WP = DocumentFormat.OpenXml.Wordprocessing;
 
 namespace WordDocumentParser.Extensions;
 
@@ -100,25 +102,14 @@ public static class ContentControlExtensions
     /// <summary>
     /// Sets the value of a content control by tag.
     /// </summary>
+    /// <param name="root">The root node to search from</param>
+    /// <param name="tag">The tag identifying the control</param>
+    /// <param name="newValue">The value to set</param>
     /// <returns>True if control was found and updated</returns>
     public static bool SetContentControlValueByTag(this DocumentNode root, string tag, string newValue)
     {
         var control = root.FindContentControlByTag(tag);
-        if (control is null) return false;
-
-        control.Text = newValue;
-        if (control.ContentControlProperties is not null)
-        {
-            control.ContentControlProperties.Value = newValue;
-        }
-
-        if (control.Runs.Count > 0)
-        {
-            control.Runs.Clear();
-            control.Runs.Add(new FormattedRun(newValue));
-        }
-
-        return true;
+        return control is not null && control.SetContentControlValue(newValue, props => props.Tag == tag);
     }
 
     /// <summary>
@@ -131,24 +122,71 @@ public static class ContentControlExtensions
     /// <summary>
     /// Sets the value of a content control by alias.
     /// </summary>
+    /// <param name="root">The root node to search from</param>
+    /// <param name="alias">The alias identifying the control</param>
+    /// <param name="newValue">The value to set</param>
     /// <returns>True if control was found and updated</returns>
     public static bool SetContentControlValueByAlias(this DocumentNode root, string alias, string newValue)
     {
         var control = root.FindContentControlByAlias(alias);
-        if (control is null) return false;
+        return control is not null && control.SetContentControlValue(newValue, props => props.Alias == alias);
+    }
 
-        control.Text = newValue;
-        if (control.ContentControlProperties is not null)
+    /// <summary>
+    /// Sets a content control's value on the node that carries it.
+    /// </summary>
+    /// <param name="node">The node holding the control.</param>
+    /// <param name="newValue">The value to set.</param>
+    /// <param name="matches">Identifies which control on the node to update.</param>
+    /// <returns>True when a matching control was updated.</returns>
+    /// <remarks>
+    /// <para>
+    /// The edit is recorded so the writer applies it to the control inside the node's original XML;
+    /// without the record the writer would emit the unmodified original and drop the new value.
+    /// </para>
+    /// <para>
+    /// For an inline control the value replaces that control's runs only, leaving the text on either
+    /// side of it alone.
+    /// </para>
+    /// </remarks>
+    private static bool SetContentControlValue(
+        this DocumentNode node, string newValue, Func<ContentControlProperties, bool> matches)
+    {
+        // Block-level control: the node itself carries the properties.
+        if (node.ContentControlProperties is { } blockProps && matches(blockProps))
         {
-            control.ContentControlProperties.Value = newValue;
+            node.Text = newValue;
+            blockProps.Value = newValue;
+
+            if (node.Runs.Count > 0)
+            {
+                node.Runs.Clear();
+                node.Runs.Add(new FormattedRun(newValue));
+                node.MarkRunsChanged();
+            }
+
+            return true;
         }
 
-        if (control.Runs.Count > 0)
+        // Inline control: replace the runs belonging to that control, keeping the rest.
+        var controlRuns = node.Runs
+            .Where(r => r.ContentControlProperties is not null && matches(r.ContentControlProperties))
+            .ToList();
+
+        if (controlRuns.Count == 0) return false;
+
+        controlRuns[0].Text = newValue;
+        for (var i = 1; i < controlRuns.Count; i++)
         {
-            control.Runs.Clear();
-            control.Runs.Add(new FormattedRun(newValue));
+            controlRuns[i].Text = string.Empty;
         }
 
+        if (controlRuns[0].ContentControlProperties is { } inlineProps)
+        {
+            inlineProps.Value = newValue;
+        }
+
+        node.MarkRunsChanged();
         return true;
     }
 
@@ -188,38 +226,106 @@ public static class ContentControlExtensions
     {
         var removed = false;
 
-        // Handle block-level content control
-        if (node.ContentControlProperties is not null)
+        // Block-level control: unwrap the SDT, keeping every block it wrapped.
+        if (node.ContentControlProperties is not null &&
+            (contentControlId is null || node.ContentControlProperties.Id == contentControlId) &&
+            TryUnwrapSdt(node))
         {
-            if (contentControlId is null || node.ContentControlProperties.Id == contentControlId)
-            {
-                node.ContentControlProperties = null;
-                node.OriginalXml = null;
-                node.Metadata.Remove("IsSdtContent");
-                node.Metadata.Remove("IsSdtBlock");
-                removed = true;
-            }
+            node.ContentControlProperties = null;
+            node.Metadata.Remove(DocumentNode.IsSdtContentKey);
+            node.Metadata.Remove(DocumentNode.IsSdtBlockKey);
+            removed = true;
         }
 
         // Handle inline content controls in runs
         foreach (var run in node.Runs)
         {
-            if (run.ContentControlProperties is not null)
+            if (run.ContentControlProperties is not null &&
+                (contentControlId is null || run.ContentControlProperties.Id == contentControlId))
             {
-                if (contentControlId is null || run.ContentControlProperties.Id == contentControlId)
-                {
-                    run.ContentControlProperties = null;
-                    removed = true;
-                }
+                run.ContentControlProperties = null;
+                removed = true;
             }
         }
 
-        if (removed && node.Runs.Any())
+        if (removed)
         {
-            node.OriginalXml = null;
+            node.MarkRunsChanged();
         }
 
         return removed;
+    }
+
+    /// <summary>
+    /// Replaces a node's SDT XML with the content the SDT wrapped, keeping every block inside it.
+    /// </summary>
+    /// <param name="node">The node whose control is being removed.</param>
+    /// <returns>False when the control could not be unwrapped without losing content.</returns>
+    /// <remarks>
+    /// The node's XML is kept rather than discarded, so the hyperlinks, fields, and formatting that
+    /// sat inside the control survive its removal. A control wrapping several blocks already holds
+    /// each of them as a child node, so it drops its own XML and lets those children be written in
+    /// its place — they are no longer part of any control's content.
+    /// </remarks>
+    private static bool TryUnwrapSdt(DocumentNode node)
+    {
+        var originalXml = node.OriginalXml;
+
+        if (string.IsNullOrEmpty(originalXml) ||
+            !originalXml.TrimStart().StartsWith("<w:sdt", StringComparison.Ordinal))
+        {
+            ReleaseChildrenFromSdt(node);
+            return true;
+        }
+
+        WP.SdtContentBlock? content;
+        try
+        {
+            content = new WP.SdtBlock(originalXml).SdtContentBlock;
+        }
+        catch (Exception)
+        {
+            // Keep the control rather than losing its content to a parse failure.
+            return false;
+        }
+
+        if (content is null) return false;
+
+        var blocks = content.ChildElements
+            .Where(child => child is not WP.SdtProperties and not WP.SdtEndCharProperties)
+            .ToList();
+
+        // Only children marked as physically inside the control count. A heading wrapped in a
+        // control also gathers the rest of its section as children by the heading hierarchy, and
+        // counting those made an ordinary heading control impossible to remove.
+        var blocksHeldAsChildren = node.Children.Count(child => child.IsInsideParentSdt);
+
+        // One paragraph, held by this node itself: keep the paragraph.
+        if (blocks.Count == 1 && blocks[0] is WP.Paragraph paragraph && blocksHeldAsChildren == 0)
+        {
+            node.OriginalXml = paragraph.OuterXml;
+            ReleaseChildrenFromSdt(node);
+            return true;
+        }
+
+        // Several blocks: the node must already hold one child per block, or unwrapping would drop
+        // whatever the tree does not represent.
+        if (blocks.Count != blocksHeldAsChildren) return false;
+
+        node.OriginalXml = null;
+        ReleaseChildrenFromSdt(node);
+        return true;
+    }
+
+    /// <summary>
+    /// Clears the marker that tells the writer a child is already emitted with its parent's SDT XML.
+    /// </summary>
+    private static void ReleaseChildrenFromSdt(DocumentNode node)
+    {
+        foreach (var child in node.Children)
+        {
+            child.Metadata.Remove(DocumentNode.IsInsideParentSdtKey);
+        }
     }
 
     /// <summary>
@@ -236,7 +342,7 @@ public static class ContentControlExtensions
     public static int RemoveAllContentControls(this DocumentNode root)
     {
         var count = 0;
-        foreach (var node in root.FindAll(_ => true))
+        foreach (var node in root.FindAllContent(_ => true))
         {
             if (node.RemoveContentControl())
             {

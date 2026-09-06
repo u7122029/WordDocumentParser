@@ -49,8 +49,8 @@ table.RemoveRow(3);
 table.RemoveColumn(2);
 ```
 
-> [!WARNING]
-> The number of values passed to `AddRow` / `InsertRow` must match the table's column count. Likewise, the number of values passed to `AddColumn` / `InsertColumn` must match the row count.
+> [!NOTE]
+> Values are matched to cells in order. Passing fewer than the table's column count leaves the remaining cells empty, and extra values are ignored — the same applies to `AddColumn` / `InsertColumn` against the row count.
 
 ## Modifying Cell Content
 

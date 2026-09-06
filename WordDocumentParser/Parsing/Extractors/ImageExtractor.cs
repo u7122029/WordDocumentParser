@@ -68,15 +68,15 @@ internal sealed class ImageExtractor
                 if (_context.MainPart.GetPartById(embedId) is ImagePart imagePart)
                 {
                     imageData.ContentType = imagePart.ContentType;
-                    using var stream = imagePart.GetStream();
-                    using var ms = new MemoryStream();
-                    stream.CopyTo(ms);
-                    imageData.Data = ms.ToArray();
+
+                    // Shared buffer: a part referenced by several drawings is read once, so the same
+                    // picture used many times costs one copy rather than one per occurrence.
+                    imageData.Data = _context.ReadBinaryPart(imagePart);
                 }
             }
-            catch
+            catch (Exception ex) when (ex is not Core.DocumentLimitExceededException)
             {
-                // Image extraction failed, continue without data
+                _context.Recovery.Report(embedId, "Image part could not be read.", ex);
             }
         }
 

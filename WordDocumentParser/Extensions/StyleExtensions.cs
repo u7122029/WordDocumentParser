@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
 
@@ -62,27 +61,27 @@ public static class StyleExtensions
 
     /// <summary>
     /// Changes the paragraph style of a node.
-    /// Updates both the ParagraphFormatting.StyleId and the OriginalXml if present.
     /// </summary>
     /// <param name="node">The node to modify</param>
     /// <param name="newStyleId">The new style ID (e.g., "Heading2", "Quote", "NoSpacing")</param>
+    /// <remarks>
+    /// <para>
+    /// The change is recorded on the node's formatting; the writer inserts <c>w:pStyle</c> into the
+    /// <c>w:pPr</c> of the node's original XML on save, at its schema position.
+    /// </para>
+    /// <para>
+    /// This changes the node's type and heading level to match the new style, but does not move it
+    /// in the tree — the node keeps its current parent and children.
+    /// </para>
+    /// </remarks>
     public static void ChangeStyle(this DocumentNode node, string newStyleId)
     {
-        // Ensure ParagraphFormatting exists
         node.ParagraphFormatting ??= new ParagraphFormatting();
-
-        var oldStyleId = node.ParagraphFormatting.StyleId;
-
-        // Update the StyleId
         node.ParagraphFormatting.StyleId = newStyleId;
 
-        // If there's OriginalXml, update the style in the XML as well
-        if (!string.IsNullOrEmpty(node.OriginalXml))
-        {
-            node.OriginalXml = UpdateStyleInXml(node.OriginalXml, oldStyleId, newStyleId);
-        }
+        // Assigning the style a node already had is still an instruction to write it.
+        node.ParagraphFormatting.MarkChanged(nameof(ParagraphFormatting.StyleId));
 
-        // If the new style is a heading, update the HeadingLevel and Type
         if (newStyleId.StartsWith("Heading", StringComparison.OrdinalIgnoreCase) &&
             int.TryParse(newStyleId.AsSpan(7), out var level))
         {
@@ -173,7 +172,7 @@ public static class StyleExtensions
     {
         var distribution = new Dictionary<string, int>();
 
-        foreach (var node in root.FindAll(_ => true))
+        foreach (var node in root.FindAllContent(_ => true))
         {
             if (node.Type is ContentType.Paragraph or ContentType.Heading or ContentType.ListItem)
             {
@@ -213,49 +212,6 @@ public static class StyleExtensions
         var style = node.ParagraphFormatting?.StyleId;
         if (style == null) return false;
         return styleIds.Any(s => s.Equals(style, StringComparison.OrdinalIgnoreCase));
-    }
-
-    #endregion
-
-    #region Private helpers
-
-    /// <summary>
-    /// Updates the style ID in an XML string.
-    /// </summary>
-    private static string UpdateStyleInXml(string xml, string? oldStyleId, string newStyleId)
-    {
-        if (oldStyleId != null)
-        {
-            // Replace existing style: <w:pStyle w:val="OldStyle"/>
-            var pattern = $@"<w:pStyle\s+w:val=""{Regex.Escape(oldStyleId)}""";
-            var replacement = $@"<w:pStyle w:val=""{newStyleId}""";
-            xml = Regex.Replace(xml, pattern, replacement, RegexOptions.IgnoreCase);
-        }
-        else
-        {
-            // No existing style - need to add one
-            // Look for <w:pPr> and add the style inside it
-            var pPrPattern = @"(<w:pPr[^>]*>)";
-            var match = Regex.Match(xml, pPrPattern);
-            if (match.Success)
-            {
-                var pPrTag = match.Groups[1].Value;
-                xml = xml.Replace(pPrTag, $@"{pPrTag}<w:pStyle w:val=""{newStyleId}""/>");
-            }
-            else
-            {
-                // No pPr exists - need to add one after <w:p ...>
-                var pTagPattern = @"(<w:p[^>]*>)";
-                match = Regex.Match(xml, pTagPattern);
-                if (match.Success)
-                {
-                    var pTag = match.Groups[1].Value;
-                    xml = xml.Replace(pTag, $@"{pTag}<w:pPr><w:pStyle w:val=""{newStyleId}""/></w:pPr>");
-                }
-            }
-        }
-
-        return xml;
     }
 
     #endregion

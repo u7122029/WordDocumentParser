@@ -1,11 +1,16 @@
 namespace WordDocumentParser.Models.ContentControls;
 
 /// <summary>
-/// Types of document properties
+/// Which part of the package a document property lives in.
 /// </summary>
 public enum DocumentPropertyType
 {
-    Core,       // Title, Subject, Author, etc.
-    Extended,   // Company, Manager, etc.
-    Custom      // User-defined properties
+    /// <summary>Core property from <c>docProps/core.xml</c>: title, subject, author, and so on.</summary>
+    Core,
+
+    /// <summary>Extended property from <c>docProps/app.xml</c>: company, manager, statistics.</summary>
+    Extended,
+
+    /// <summary>User-defined property from <c>docProps/custom.xml</c>.</summary>
+    Custom
 }

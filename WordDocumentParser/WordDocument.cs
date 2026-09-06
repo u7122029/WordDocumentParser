@@ -1,3 +1,4 @@
+using System.Xml;
 using System.Xml.Linq;
 using WordDocumentParser.Core;
 using WordDocumentParser.Extensions;
@@ -12,6 +13,8 @@ namespace WordDocumentParser;
 public class WordDocument
 {
     private Dictionary<string, string>? _customProperties;
+    private Dictionary<string, string>? _originalCustomPropertyValues;
+    private XDocument? _customPropertiesDocument;
     private bool _customPropertiesParsed;
 
     /// <summary>
@@ -140,11 +143,10 @@ public class WordDocument
         if (builtInValue is not null)
             return builtInValue;
 
-        // Fall back to custom properties (case-insensitive lookup)
+        // Fall back to custom properties. The dictionary already compares keys case-insensitively,
+        // so a direct lookup suffices.
         EnsureCustomPropertiesParsed();
-        var customKey = _customProperties!.Keys.FirstOrDefault(k =>
-            string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
-        return customKey is not null ? _customProperties[customKey] : null;
+        return _customProperties!.GetValueOrDefault(propertyName);
     }
 
     /// <summary>
@@ -175,14 +177,10 @@ public class WordDocument
         }
         else
         {
-            // Store as custom property (preserve original casing for new properties)
+            // Store as custom property. The dictionary is case-insensitive and keeps the casing of
+            // the key it was first given, so assigning through it preserves the original name.
             EnsureCustomPropertiesParsed();
-            var existingKey = _customProperties!.Keys.FirstOrDefault(k =>
-                string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
-            if (existingKey is not null)
-                _customProperties[existingKey] = value;
-            else
-                _customProperties[propertyName] = value;
+            _customProperties![propertyName] = value;
         }
     }
 
@@ -209,9 +207,7 @@ public class WordDocument
 
         // Remove from custom properties
         EnsureCustomPropertiesParsed();
-        var existingKey = _customProperties!.Keys.FirstOrDefault(k =>
-            string.Equals(k, propertyName, StringComparison.OrdinalIgnoreCase));
-        return existingKey is not null && _customProperties.Remove(existingKey);
+        return _customProperties!.Remove(propertyName);
     }
 
     /// <summary>
@@ -263,6 +259,14 @@ public class WordDocument
 
     #region Custom Properties XML Serialization
 
+    private static readonly XNamespace CustomPropertiesNamespace =
+        "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties";
+
+    private static readonly XNamespace VariantTypesNamespace =
+        "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes";
+
+    private const string CustomPropertyFormatId = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
+
     private void EnsureCustomPropertiesParsed()
     {
         if (_customPropertiesParsed) return;
@@ -274,25 +278,27 @@ public class WordDocument
 
         try
         {
-            var doc = XDocument.Parse(PackageData.CustomPropertiesXml);
+            _customPropertiesDocument = XDocument.Parse(PackageData.CustomPropertiesXml);
+            _originalCustomPropertyValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             // Find all property elements regardless of namespace
             // The element local name is "property" in Open XML custom properties
-            foreach (var prop in doc.Descendants().Where(e => e.Name.LocalName == "property"))
+            foreach (var prop in _customPropertiesDocument.Descendants().Where(e => e.Name.LocalName == "property"))
             {
                 var name = prop.Attribute("name")?.Value;
-                if (name is not null)
-                {
-                    // Get the value from any child element (lpwstr, i4, bool, filetime, etc.)
-                    var valueElement = prop.Elements().FirstOrDefault();
-                    var value = valueElement?.Value ?? string.Empty;
-                    _customProperties[name] = value;
-                }
+                if (name is null) continue;
+
+                // Get the value from any child element (lpwstr, i4, bool, filetime, etc.)
+                var value = prop.Elements().FirstOrDefault()?.Value ?? string.Empty;
+                _customProperties[name] = value;
+                _originalCustomPropertyValues[name] = value;
             }
         }
-        catch
+        catch (System.Xml.XmlException)
         {
-            // If parsing fails, start with empty dictionary
+            // Malformed custom properties: expose an empty dictionary rather than failing the parse,
+            // and drop the unusable document so a save does not propagate it.
+            _customPropertiesDocument = null;
         }
     }
 
@@ -300,33 +306,121 @@ public class WordDocument
     /// Serializes the custom properties back to XML format for saving.
     /// Called automatically by the writer.
     /// </summary>
+    /// <remarks>
+    /// Only properties whose value the caller actually changed are rewritten; the rest keep the
+    /// element the source document had, and with it their declared type. Regenerating them all as
+    /// <c>vt:lpwstr</c> would retype a document's numeric and boolean properties on any save.
+    /// </remarks>
     internal void SyncCustomPropertiesToXml()
     {
-        if (!_customPropertiesParsed || _customProperties is null || _customProperties.Count == 0)
+        // Never read or written: leave the source XML exactly as it was.
+        if (!_customPropertiesParsed || _customProperties is null) return;
+
+        if (_customProperties.Count == 0)
         {
-            if (_customPropertiesParsed && (_customProperties is null || _customProperties.Count == 0))
-                PackageData.CustomPropertiesXml = null;
+            PackageData.CustomPropertiesXml = null;
             return;
         }
 
-        XNamespace ns = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties";
-        XNamespace vt = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes";
+        var root = _customPropertiesDocument?.Root is { } existingRoot
+            ? new XElement(existingRoot)
+            : new XElement(CustomPropertiesNamespace + "Properties",
+                new XAttribute(XNamespace.Xmlns + "vt", VariantTypesNamespace));
 
-        var props = new XElement(ns + "Properties",
-            new XAttribute(XNamespace.Xmlns + "vt", vt));
+        var byName = root.Elements()
+            .Where(e => e.Name.LocalName == "property")
+            .ToDictionary(e => e.Attribute("name")?.Value ?? string.Empty, StringComparer.OrdinalIgnoreCase);
 
-        var pid = 2; // Property IDs start at 2
-        foreach (var kvp in _customProperties)
+        // Drop properties the caller removed.
+        foreach (var (name, element) in byName)
         {
-            var prop = new XElement(ns + "property",
-                new XAttribute("fmtid", "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}"),
-                new XAttribute("pid", pid++),
-                new XAttribute("name", kvp.Key),
-                new XElement(vt + "lpwstr", kvp.Value));
-            props.Add(prop);
+            if (!_customProperties.ContainsKey(name))
+            {
+                element.Remove();
+            }
         }
 
-        PackageData.CustomPropertiesXml = props.ToString();
+        var nextPid = root.Elements()
+            .Select(e => int.TryParse(e.Attribute("pid")?.Value, out var pid) ? pid : 1)
+            .DefaultIfEmpty(1)
+            .Max() + 1;
+
+        foreach (var (name, value) in _customProperties)
+        {
+            if (byName.TryGetValue(name, out var element))
+            {
+                // Untouched: keep the original element, and with it the property's declared type.
+                if (_originalCustomPropertyValues is not null &&
+                    _originalCustomPropertyValues.TryGetValue(name, out var original) &&
+                    original == value)
+                {
+                    continue;
+                }
+
+                // Changed: keep the element's type if it still accepts the new value, otherwise
+                // fall back to text, which is all a string value can promise.
+                var valueElement = element.Elements().FirstOrDefault();
+                if (valueElement is not null && IsAssignable(valueElement.Name.LocalName, value))
+                {
+                    valueElement.Value = value;
+                }
+                else
+                {
+                    element.Elements().Remove();
+                    element.Add(new XElement(VariantTypesNamespace + "lpwstr", value));
+                }
+
+                continue;
+            }
+
+            root.Add(new XElement(CustomPropertiesNamespace + "property",
+                new XAttribute("fmtid", CustomPropertyFormatId),
+                new XAttribute("pid", nextPid++),
+                new XAttribute("name", name),
+                new XElement(VariantTypesNamespace + "lpwstr", value)));
+        }
+
+        PackageData.CustomPropertiesXml = root.ToString();
+    }
+
+    /// <summary>
+    /// Returns true when a string value fits both the range and the lexical form of the variant type
+    /// it is replacing.
+    /// </summary>
+    /// <remarks>
+    /// Each width is checked against its own range. Treating every signed integer as a 64-bit value
+    /// let <c>2147483648</c> be written into a <c>vt:i4</c>, producing a document the SDK rejects.
+    /// Parsing is culture-invariant so a machine's locale cannot change what a document contains.
+    /// </remarks>
+    private static bool IsAssignable(string variantType, string value)
+    {
+        try
+        {
+            switch (variantType)
+            {
+                case "lpwstr" or "lpstr" or "bstr": return true;
+                case "i1": XmlConvert.ToSByte(value); return true;
+                case "i2": XmlConvert.ToInt16(value); return true;
+                case "i4" or "int": XmlConvert.ToInt32(value); return true;
+                case "i8": XmlConvert.ToInt64(value); return true;
+                case "ui1": XmlConvert.ToByte(value); return true;
+                case "ui2": XmlConvert.ToUInt16(value); return true;
+                case "ui4" or "uint": XmlConvert.ToUInt32(value); return true;
+                case "ui8": XmlConvert.ToUInt64(value); return true;
+                case "r4": XmlConvert.ToSingle(value); return true;
+                case "r8": XmlConvert.ToDouble(value); return true;
+                case "decimal": XmlConvert.ToDecimal(value); return true;
+                case "bool": XmlConvert.ToBoolean(value); return true;
+                case "filetime" or "date":
+                    XmlConvert.ToDateTime(value, XmlDateTimeSerializationMode.RoundtripKind);
+                    return true;
+                default: return false;
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException or ArgumentException)
+        {
+            return false;
+        }
     }
 
     #endregion

@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore WordDocumentParser.sln
+
+      # Warnings are the library's documentation gate: GenerateDocumentationFile is on, so a public
+      # member without XML docs fails the build rather than quietly shipping undocumented.
+      - name: Build
+        run: dotnet build WordDocumentParser.sln --configuration Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test WordDocumentParser.sln --configuration Release --no-build --verbosity normal
+
+      - name: Audit dependencies
+        run: dotnet list WordDocumentParser.sln package --vulnerable --include-transitive

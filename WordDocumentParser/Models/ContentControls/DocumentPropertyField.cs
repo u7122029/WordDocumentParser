@@ -30,4 +30,14 @@ public class DocumentPropertyField
     /// </summary>
     public string ToMetadataString()
         => $"[DocProperty:{PropertyType}/{PropertyName}=\"{Value ?? "(empty)"}\"]";
+
+    /// <summary>Creates an independent copy of this field.</summary>
+    /// <returns>The copy.</returns>
+    public DocumentPropertyField Clone() => new()
+    {
+        PropertyType = PropertyType,
+        PropertyName = PropertyName,
+        Value = Value,
+        FieldCode = FieldCode
+    };
 }

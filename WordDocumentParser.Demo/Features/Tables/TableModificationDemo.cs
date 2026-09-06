@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using WordDocumentParser.Core;
+using WordDocumentParser.Demo.Features.RoundTrip;
 using WordDocumentParser.Extensions;
 
 namespace WordDocumentParser.Demo.Features.Tables;
@@ -12,6 +12,10 @@ namespace WordDocumentParser.Demo.Features.Tables;
 /// </summary>
 public static class TableModificationDemo
 {
+    /// <summary>
+    /// Runs the demo against the first table in the given document.
+    /// </summary>
+    /// <param name="inputPath">The document to modify.</param>
     public static void Run(string inputPath)
     {
         Console.WriteLine("=== Table Modification Demo ===\n");
@@ -20,22 +24,20 @@ public static class TableModificationDemo
         using var parser = new WordDocumentTreeParser();
         var doc = parser.ParseFromFile(inputPath);
 
-        // var tables = doc.FindAllTables(includeNested: false).ToList();
-        // if (tables.Count == 0)
-        // {
-        //     Console.WriteLine("No tables found in the document.");
-        //     return;
-        // }
-
-        // var table = tables[0];
-        var table = doc.FindAll(node =>
+        var table = doc.FindAllTables(includeNested: false).FirstOrDefault();
+        if (table is null)
         {
-            if (node.Type != ContentType.Table) return false;
-            var data = node.GetCellText(0, 0)!.Trim();
-            return data == "Acronym";
-        }).First();
-        var originalFirstCellText = table.GetCellText(0, 0)!.Trim();
+            Console.WriteLine($"No tables found in {Path.GetFileName(inputPath)} — nothing to demonstrate.");
+            return;
+        }
+
+        var originalFirstCellText = table.GetCellText(0, 0)?.Trim() ?? string.Empty;
         var (originalRows, originalCols) = table.GetDimensions();
+        if (originalRows == 0 || originalCols == 0)
+        {
+            Console.WriteLine("The first table has no cells — nothing to demonstrate.");
+            return;
+        }
         Console.WriteLine($"Working with first table: {originalRows} rows x {originalCols} columns");
         Console.WriteLine("\nOriginal table:");
         Console.WriteLine(table.ToTextRepresentation());
@@ -135,15 +137,22 @@ public static class TableModificationDemo
         Console.WriteLine("\nVerifying saved document...");
         using var verifyParser = new WordDocumentTreeParser();
         var verifiedDoc = verifyParser.ParseFromFile(outputPath);
-        var verifiedTable = verifiedDoc.FindAll(node =>
+        var verifiedTable = verifiedDoc.FindAllTables(includeNested: false).FirstOrDefault(node =>
+            originalFirstCellText.Length == 0 ||
+            node.GetCellText(0, 0)?.Contains(originalFirstCellText, StringComparison.Ordinal) == true);
+
+        if (verifiedTable is null)
         {
-            if (node.Type != ContentType.Table) return false;
-            var text = node.GetCellText(0, 0);
-            return text != null && text.Contains(originalFirstCellText);
-        }).First();
-        var (verifiedRows, verifiedCols) = verifiedTable.GetDimensions();
-        Console.WriteLine($"Verified table: {verifiedRows} rows x {verifiedCols} columns");
-        Console.WriteLine(verifiedTable.ToTextRepresentation());
+            Console.WriteLine("The modified table could not be found in the saved document.");
+        }
+        else
+        {
+            var (verifiedRows, verifiedCols) = verifiedTable.GetDimensions();
+            Console.WriteLine($"Verified table: {verifiedRows} rows x {verifiedCols} columns");
+            Console.WriteLine(verifiedTable.ToTextRepresentation());
+        }
+
+        DocumentValidator.ValidateAndReport(outputPath);
 
         Console.WriteLine($"\n=== Demo Complete ===");
         Console.WriteLine($"Output file: {outputPath}");

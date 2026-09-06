@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <RootNamespace>WordDocumentParser.Tests</RootNamespace>
+        <AssemblyName>WordDocumentParser.Tests</AssemblyName>
+        <IsPackable>false</IsPackable>
+        <!-- Tests assert on shapes the SDK types cannot express as non-null, so the null-analysis
+             warnings here are noise rather than signal. Failures show up as test failures. -->
+        <NoWarn>$(NoWarn);CS8602</NoWarn>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+        <PackageReference Include="xunit" Version="2.9.2" />
+        <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+        <PackageReference Include="DocumentFormat.OpenXml" Version="3.4.1" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\WordDocumentParser\WordDocumentParser.csproj" />
+    </ItemGroup>
+
+</Project>

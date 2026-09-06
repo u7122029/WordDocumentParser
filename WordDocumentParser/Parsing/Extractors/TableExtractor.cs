@@ -30,6 +30,8 @@ internal sealed class TableExtractor
     /// </summary>
     public DocumentNode ProcessTable(Table table)
     {
+        // Nested tables recurse here, but only as deep as the XML allows, and the parser has already
+        // rejected anything deeper than DocumentLimits.MaxElementDepth before loading the DOM.
         var node = new DocumentNode(ContentType.Table, "[Table]");
         var tableData = new TableData();
 
@@ -110,6 +112,10 @@ internal sealed class TableExtractor
         node.Text = $"[Table: {tableData.RowCount}x{tableData.ColumnCount}]";
         node.OriginalXml = table.OuterXml;
 
+        // The table now matches its source exactly, so it is the unmodified baseline. Anything the
+        // caller changes afterwards is what the writer will apply back onto this XML.
+        node.AcceptAllChanges();
+
         return node;
     }
 
@@ -127,11 +133,11 @@ internal sealed class TableExtractor
         if (width is not null)
         {
             formatting.Width = width.Width?.Value;
-            formatting.WidthType = width.Type?.Value.ToString();
+            formatting.WidthType = OoxmlEnum.Token(width.Type);
         }
 
         // Alignment
-        formatting.Alignment = tblPr.TableJustification?.Val?.Value.ToString();
+        formatting.Alignment = OoxmlEnum.Token(tblPr.TableJustification?.Val);
 
         // Indent
         formatting.IndentFromLeft = tblPr.TableIndentation?.Width?.Value.ToString();
@@ -175,7 +181,7 @@ internal sealed class TableExtractor
         if (height is not null)
         {
             formatting.Height = height.Val?.Value.ToString();
-            formatting.HeightRule = height.HeightType?.Value.ToString();
+            formatting.HeightRule = OoxmlEnum.Token(height.HeightType);
         }
 
         // Header
@@ -201,7 +207,7 @@ internal sealed class TableExtractor
         if (width is not null)
         {
             formatting.Width = width.Width?.Value;
-            formatting.WidthType = width.Type?.Value.ToString();
+            formatting.WidthType = OoxmlEnum.Token(width.Type);
         }
 
         // Grid span
@@ -215,7 +221,7 @@ internal sealed class TableExtractor
         }
 
         // Vertical alignment
-        formatting.VerticalAlignment = tcPr.TableCellVerticalAlignment?.Val?.Value.ToString();
+        formatting.VerticalAlignment = OoxmlEnum.Token(tcPr.TableCellVerticalAlignment?.Val);
 
         // Shading
         var shading = tcPr.Shading;
@@ -223,7 +229,7 @@ internal sealed class TableExtractor
         {
             formatting.ShadingFill = shading.Fill?.Value;
             formatting.ShadingColor = shading.Color?.Value;
-            formatting.ShadingPattern = shading.Val?.Value.ToString();
+            formatting.ShadingPattern = OoxmlEnum.Token(shading.Val);
         }
 
         // Borders
@@ -237,7 +243,7 @@ internal sealed class TableExtractor
         }
 
         // Text direction
-        formatting.TextDirection = tcPr.TextDirection?.Val?.Value.ToString();
+        formatting.TextDirection = OoxmlEnum.Token(tcPr.TextDirection?.Val);
 
         // No wrap
         formatting.NoWrap = tcPr.NoWrap is not null;

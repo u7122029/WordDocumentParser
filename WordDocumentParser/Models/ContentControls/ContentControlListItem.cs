@@ -15,6 +15,8 @@ public class ContentControlListItem
     /// </summary>
     public string? Value { get; set; }
 
+    /// <summary>Creates an independent copy of this item.</summary>
+    /// <returns>The copy.</returns>
     public ContentControlListItem Clone() => new()
     {
         DisplayText = DisplayText,

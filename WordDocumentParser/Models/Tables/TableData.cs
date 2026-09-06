@@ -1,54 +1,111 @@
+using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
 
 namespace WordDocumentParser.Models.Tables;
 
 /// <summary>
-/// Represents a complete table structure with rows, cells, and formatting.
+/// A complete table structure with rows, cells, and formatting.
 /// </summary>
-public class TableData
+public class TableData : TrackedModel
 {
-    /// <summary>All rows in the table</summary>
-    public List<TableRow> Rows { get; set; } = [];
+    private List<TableRow> _rows = [];
+    private int _columnCount;
+    private TableFormatting? _formatting;
 
-    /// <summary>Number of rows in the table</summary>
+    /// <summary>All rows in the table, in document order.</summary>
+    public List<TableRow> Rows { get => _rows; set { Set(ref _rows, value ?? []); MarkRowsChanged(); } }
+
+    /// <summary>Number of rows in the table.</summary>
     public int RowCount => Rows.Count;
 
-    /// <summary>Number of columns in the table</summary>
-    public int ColumnCount { get; set; }
+    /// <summary>Number of logical columns in the table, counting merged columns once each.</summary>
+    public int ColumnCount { get => _columnCount; set => Set(ref _columnCount, value); }
 
-    /// <summary>Table-level formatting properties for round-trip fidelity</summary>
-    public TableFormatting? Formatting { get; set; }
+    /// <summary>Table-level formatting properties.</summary>
+    public TableFormatting? Formatting { get => _formatting; set => Set(ref _formatting, value); }
 
-    /// <summary>
-    /// Gets a cell at the specified position.
-    /// </summary>
-    /// <param name="row">Zero-based row index</param>
-    /// <param name="column">Zero-based column index</param>
-    /// <returns>The cell at the position, or null if not found</returns>
-    public TableCell? GetCell(int row, int column)
+    /// <summary>Records that rows were added to or removed from this table.</summary>
+    public void MarkRowsChanged() => MarkChanged(nameof(Rows));
+
+    /// <summary>True when rows have been added to or removed from this table.</summary>
+    public bool IsRowsChanged => IsChanged(nameof(Rows));
+
+    /// <summary>True when the table, its formatting, or anything inside it has pending changes.</summary>
+    public bool HasTableChanges =>
+        HasChanges ||
+        _formatting?.HasChanges is true ||
+        _rows.Exists(row => row.HasRowChanges);
+
+    /// <summary>Clears the change record on the table and everything inside it.</summary>
+    public void AcceptAllChanges()
     {
-        if (row < 0 || row >= Rows.Count)
-            return null;
-
-        var tableRow = Rows[row];
-        return tableRow.Cells.Find(c => c.ColumnIndex == column);
+        AcceptChanges();
+        _formatting?.AcceptChanges();
+        foreach (var row in _rows)
+        {
+            row.AcceptAllChanges();
+        }
     }
 
     /// <summary>
-    /// Gets all text content as a 2D array for easy access.
+    /// Gets the cell occupying the given logical position.
     /// </summary>
-    /// <returns>2D string array with cell text content</returns>
+    /// <param name="row">Zero-based row index.</param>
+    /// <param name="column">Zero-based logical column index.</param>
+    /// <returns>The cell covering that position, or null when there is none.</returns>
+    /// <remarks>
+    /// A horizontally merged cell covers every column in its span, so asking for any column within
+    /// the span returns the merged cell.
+    /// </remarks>
+    public TableCell? GetCell(int row, int column)
+    {
+        if (row < 0 || row >= Rows.Count || column < 0)
+            return null;
+
+        foreach (var cell in Rows[row].Cells)
+        {
+            if (column >= cell.ColumnIndex && column < cell.ColumnIndex + Math.Max(1, cell.ColSpan))
+                return cell;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gets all cell text as a two-dimensional array indexed by row and logical column.
+    /// </summary>
+    /// <returns>The cell text, with empty strings for positions no cell covers.</returns>
+    /// <remarks>
+    /// Filled by walking each row once rather than searching the row for every column, so the cost
+    /// is linear in the number of cells instead of quadratic in the table's dimensions.
+    /// </remarks>
     public string[,] ToTextArray()
     {
         var result = new string[RowCount, ColumnCount];
-        for (var i = 0; i < RowCount; i++)
+
+        for (var rowIndex = 0; rowIndex < RowCount; rowIndex++)
         {
-            for (var j = 0; j < ColumnCount; j++)
+            for (var column = 0; column < ColumnCount; column++)
             {
-                var cell = GetCell(i, j);
-                result[i, j] = cell?.TextContent ?? string.Empty;
+                result[rowIndex, column] = string.Empty;
+            }
+
+            foreach (var cell in Rows[rowIndex].Cells)
+            {
+                var text = cell.TextContent;
+                var span = Math.Max(1, cell.ColSpan);
+
+                for (var offset = 0; offset < span; offset++)
+                {
+                    var column = cell.ColumnIndex + offset;
+                    if (column >= 0 && column < ColumnCount)
+                    {
+                        result[rowIndex, column] = text;
+                    }
+                }
             }
         }
+
         return result;
     }
 }

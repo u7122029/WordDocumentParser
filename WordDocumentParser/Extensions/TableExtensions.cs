@@ -1,4 +1,3 @@
-using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
@@ -208,30 +207,37 @@ public static class TableExtensions
     /// <param name="cell">The cell to modify</param>
     /// <param name="text">The text to set</param>
     /// <returns>True if successful</returns>
+    /// <remarks>
+    /// Setting a cell's text to the empty string empties it, in the saved document as well as in
+    /// the model.
+    /// </remarks>
     public static bool SetText(this TableCell cell, string text)
     {
         if (cell.Content.Count == 0)
         {
-            // Create a new paragraph node
-            var paraNode = new DocumentNode(ContentType.Paragraph, text);
-            cell.Content.Add(paraNode);
+            cell.Content.Add(new DocumentNode(ContentType.Paragraph, text));
+            cell.MarkContentChanged();
+            return true;
         }
-        else
+
+        var firstContent = cell.Content[0];
+        firstContent.Text = text;
+        firstContent.MarkChanged(nameof(DocumentNode.Text));
+
+        // Plain text replaces any formatted runs the paragraph had.
+        if (firstContent.Runs.Count > 0)
         {
-            // Update the first paragraph node
-            var firstContent = cell.Content[0];
-            var oldText = firstContent.Text;
-            firstContent.Text = text;
-
-            // Clear runs since we're setting plain text
             firstContent.Runs.Clear();
-
-            // Update OriginalXml if present
-            if (!string.IsNullOrEmpty(firstContent.OriginalXml))
-            {
-                firstContent.OriginalXml = UpdateTextInXml(firstContent.OriginalXml, oldText, text);
-            }
+            firstContent.MarkRunsChanged();
         }
+
+        // Extra paragraphs in the cell are not part of the new value.
+        if (cell.Content.Count > 1)
+        {
+            cell.Content.RemoveRange(1, cell.Content.Count - 1);
+            cell.MarkContentChanged();
+        }
+
         return true;
     }
 
@@ -242,8 +248,8 @@ public static class TableExtensions
     /// <param name="text">The text to append</param>
     public static void AppendText(this TableCell cell, string text)
     {
-        var paraNode = new DocumentNode(ContentType.Paragraph, text);
-        cell.Content.Add(paraNode);
+        cell.Content.Add(new DocumentNode(ContentType.Paragraph, text));
+        cell.MarkContentChanged();
     }
 
     /// <summary>
@@ -260,19 +266,16 @@ public static class TableExtensions
             if (content.Type is not (ContentType.Paragraph or ContentType.Heading or ContentType.ListItem))
                 continue;
 
-            if (!content.Text.Contains(textToRemove))
+            if (!content.Text.Contains(textToRemove, StringComparison.Ordinal))
                 continue;
 
-            var oldText = content.Text;
-            content.Text = content.Text.Replace(textToRemove, "");
+            content.Text = content.Text.Replace(textToRemove, "", StringComparison.Ordinal);
+            content.MarkChanged(nameof(DocumentNode.Text));
 
-            // Clear runs since we're modifying plain text
-            content.Runs.Clear();
-
-            // Update OriginalXml if present
-            if (!string.IsNullOrEmpty(content.OriginalXml))
+            if (content.Runs.Count > 0)
             {
-                content.OriginalXml = UpdateTextInXml(content.OriginalXml, oldText, content.Text);
+                content.Runs.Clear();
+                content.MarkRunsChanged();
             }
 
             return true;
@@ -285,9 +288,15 @@ public static class TableExtensions
     /// Clears all content from a cell.
     /// </summary>
     /// <param name="cell">The cell to clear</param>
+    /// <remarks>
+    /// The clear is recorded so the writer empties the cell in the saved document. Previously the
+    /// writer had no way to tell an emptied cell from one that simply parsed to no content nodes,
+    /// and left the original text in place — which matters when the caller was redacting.
+    /// </remarks>
     public static void ClearContent(this TableCell cell)
     {
         cell.Content.Clear();
+        cell.MarkContentChanged();
     }
 
     #endregion
@@ -319,6 +328,7 @@ public static class TableExtensions
     {
         cell.Formatting ??= new TableCellFormatting();
         cell.Formatting.ShadingFill = fillColor;
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.ShadingFill));
     }
 
     /// <summary>
@@ -330,6 +340,7 @@ public static class TableExtensions
     {
         cell.Formatting ??= new TableCellFormatting();
         cell.Formatting.VerticalAlignment = alignment;
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.VerticalAlignment));
     }
 
     /// <summary>
@@ -352,6 +363,12 @@ public static class TableExtensions
         cell.Formatting.BottomBorder = border.Clone();
         cell.Formatting.LeftBorder = border.Clone();
         cell.Formatting.RightBorder = border.Clone();
+
+        // Borders are only rewritten on an explicit edit, so record this one.
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.TopBorder));
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.BottomBorder));
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.LeftBorder));
+        cell.Formatting.MarkChanged(nameof(TableCellFormatting.RightBorder));
     }
 
     #endregion
@@ -405,6 +422,7 @@ public static class TableExtensions
         }
 
         tableData.Rows.Add(newRow);
+        tableData.MarkRowsChanged();
 
         // Modify OriginalXml to include the new row, preserving table style
         ApplyXmlStructuralChange(tableNode, xmlTable =>
@@ -451,6 +469,7 @@ public static class TableExtensions
         }
 
         tableData.Rows.Insert(rowIndex, newRow);
+        tableData.MarkRowsChanged();
 
         // Re-index rows after the insertion point
         for (var i = rowIndex + 1; i < tableData.Rows.Count; i++)
@@ -493,6 +512,7 @@ public static class TableExtensions
             return false;
 
         tableData.Rows.RemoveAt(rowIndex);
+        tableData.MarkRowsChanged();
 
         // Re-index remaining rows and their cells
         for (var i = rowIndex; i < tableData.Rows.Count; i++)
@@ -525,6 +545,7 @@ public static class TableExtensions
         row.IsHeader = isHeader;
         row.Formatting ??= new TableRowFormatting();
         row.Formatting.IsHeader = isHeader;
+        row.Formatting.MarkChanged(nameof(TableRowFormatting.IsHeader));
     }
 
     /// <summary>
@@ -568,7 +589,10 @@ public static class TableExtensions
                 Content = [new DocumentNode(ContentType.Paragraph, text)]
             };
             tableData.Rows[row].Cells.Add(cell);
+            tableData.Rows[row].MarkCellsChanged();
         }
+
+        tableData.MarkRowsChanged();
 
         // Modify OriginalXml to add the new column, preserving table style
         ApplyXmlStructuralChange(tableNode, xmlTable =>
@@ -629,7 +653,11 @@ public static class TableExtensions
                 tableData.Rows[row].Cells.Add(cell);
             else
                 tableData.Rows[row].Cells.Insert(insertAt, cell);
+
+            tableData.Rows[row].MarkCellsChanged();
         }
+
+        tableData.MarkRowsChanged();
 
         // Modify OriginalXml to insert the new column at the correct position
         ApplyXmlStructuralChange(tableNode, xmlTable =>
@@ -661,38 +689,114 @@ public static class TableExtensions
     /// <param name="tableNode">The table node</param>
     /// <param name="columnIndex">Zero-based column index of the column to remove</param>
     /// <returns>True if the column was removed, false if not found</returns>
+    /// <remarks>
+    /// Column indices are logical: a cell spanning two columns occupies two of them but is a single
+    /// cell in the row. Each row is walked by accumulated span to find the cell covering the
+    /// requested column, because indexing the row's cells directly picks the wrong one wherever a
+    /// horizontal merge sits to the left.
+    /// </remarks>
     public static bool RemoveColumn(this DocumentNode tableNode, int columnIndex)
     {
         var tableData = tableNode.GetTableData();
         if (tableData is null || columnIndex < 0 || columnIndex >= tableData.ColumnCount)
             return false;
 
+        // Resolve the logical column to a physical cell position per row before mutating anything,
+        // so the XML pass and the model pass agree on which cell to remove.
+        var physicalIndexPerRow = new List<int>(tableData.Rows.Count);
         foreach (var row in tableData.Rows)
         {
-            row.Cells.RemoveAll(c => c.ColumnIndex == columnIndex);
+            physicalIndexPerRow.Add(FindPhysicalCellIndex(row, columnIndex));
+        }
 
-            // Re-index remaining cells in this row
-            foreach (var cell in row.Cells.Where(c => c.ColumnIndex > columnIndex))
+        for (var rowIndex = 0; rowIndex < tableData.Rows.Count; rowIndex++)
+        {
+            var row = tableData.Rows[rowIndex];
+            var physicalIndex = physicalIndexPerRow[rowIndex];
+            if (physicalIndex < 0) continue;
+
+            var cell = row.Cells[physicalIndex];
+
+            if (cell.ColSpan > 1)
             {
-                cell.ColumnIndex--;
+                // The column is part of a merge: narrow the merged cell rather than deleting it.
+                cell.ColSpan--;
+                if (cell.Formatting is not null)
+                {
+                    cell.Formatting.GridSpan = cell.ColSpan;
+                }
+            }
+            else
+            {
+                row.Cells.RemoveAt(physicalIndex);
+                row.MarkCellsChanged();
+            }
+
+            foreach (var following in row.Cells.Where(c => c.ColumnIndex > columnIndex))
+            {
+                following.ColumnIndex--;
             }
         }
 
         tableData.ColumnCount--;
+        tableData.MarkRowsChanged();
 
         // Modify OriginalXml to remove the column
         ApplyXmlStructuralChange(tableNode, xmlTable =>
         {
-            foreach (var xmlRow in xmlTable.Elements<WP.TableRow>())
+            var xmlRows = xmlTable.Elements<WP.TableRow>().ToList();
+            for (var rowIndex = 0; rowIndex < xmlRows.Count && rowIndex < physicalIndexPerRow.Count; rowIndex++)
             {
-                var cells = xmlRow.Elements<WP.TableCell>().ToList();
-                if (columnIndex < cells.Count)
-                    cells[columnIndex].Remove();
+                var physicalIndex = physicalIndexPerRow[rowIndex];
+                if (physicalIndex < 0) continue;
+
+                var cells = xmlRows[rowIndex].Elements<WP.TableCell>().ToList();
+                if (physicalIndex >= cells.Count) continue;
+
+                var xmlCell = cells[physicalIndex];
+                var gridSpan = xmlCell.TableCellProperties?.GridSpan;
+                var span = (int)(gridSpan?.Val?.Value ?? 1);
+
+                if (span > 1)
+                {
+                    if (span - 1 == 1)
+                    {
+                        gridSpan!.Remove();
+                    }
+                    else
+                    {
+                        gridSpan!.Val = span - 1;
+                    }
+                }
+                else
+                {
+                    xmlCell.Remove();
+                }
             }
+
             RemoveGridColumnAt(xmlTable, columnIndex);
         });
 
         return true;
+    }
+
+    /// <summary>
+    /// Finds the position within a row's cell list of the cell covering a logical column.
+    /// </summary>
+    /// <returns>The position, or -1 when no cell covers that column.</returns>
+    private static int FindPhysicalCellIndex(TableRow row, int columnIndex)
+    {
+        for (var i = 0; i < row.Cells.Count; i++)
+        {
+            var cell = row.Cells[i];
+            var span = Math.Max(1, cell.ColSpan);
+            if (columnIndex >= cell.ColumnIndex && columnIndex < cell.ColumnIndex + span)
+            {
+                return i;
+            }
+        }
+
+        return -1;
     }
 
     #endregion
@@ -715,6 +819,10 @@ public static class TableExtensions
     /// </summary>
     /// <param name="tableNode">The table node</param>
     /// <param name="alignment">Alignment value: "Left", "Center", or "Right"</param>
+    /// <remarks>
+    /// The change is recorded on the table's formatting and applied to the table's own
+    /// <c>w:tblPr</c> on save, not to the <c>w:jc</c> of a paragraph inside one of its cells.
+    /// </remarks>
     public static void SetTableAlignment(this DocumentNode tableNode, string alignment)
     {
         var tableData = tableNode.GetTableData();
@@ -722,12 +830,7 @@ public static class TableExtensions
 
         tableData.Formatting ??= new TableFormatting();
         tableData.Formatting.Alignment = alignment;
-
-        // Also update the OriginalXml if present
-        if (!string.IsNullOrEmpty(tableNode.OriginalXml))
-        {
-            tableNode.OriginalXml = UpdateTableAlignmentInXml(tableNode.OriginalXml, alignment);
-        }
+        tableData.Formatting.MarkChanged(nameof(TableFormatting.Alignment));
     }
 
     /// <summary>
@@ -812,58 +915,6 @@ public static class TableExtensions
     /// <returns>The first nested table, or null if none found</returns>
     public static DocumentNode? GetFirstNestedTable(this TableCell cell)
         => cell.Content.FirstOrDefault(c => c.Type == ContentType.Table);
-
-    #endregion
-
-    #region Private helpers
-
-    private static string UpdateTextInXml(string xml, string oldText, string newText)
-    {
-        // Try to replace text within <w:t> tags
-        var pattern = $@"(<w:t[^>]*>){Regex.Escape(oldText)}(</w:t>)";
-        var replacement = $"$1{newText}$2";
-        var result = Regex.Replace(xml, pattern, replacement);
-
-        // If no match, try a simpler text replacement (for single <w:t> tags)
-        if (result == xml && !string.IsNullOrEmpty(oldText))
-        {
-            result = xml.Replace($">{oldText}<", $">{newText}<");
-        }
-
-        return result;
-    }
-
-    private static string UpdateTableAlignmentInXml(string xml, string alignment)
-    {
-        // Map alignment to Word values
-        var wordAlignment = alignment.ToLowerInvariant() switch
-        {
-            "left" => "left",
-            "center" => "center",
-            "right" => "right",
-            _ => alignment.ToLowerInvariant()
-        };
-
-        // Try to replace existing alignment
-        var pattern = @"<w:jc\s+w:val=""[^""]*""";
-        var replacement = $@"<w:jc w:val=""{wordAlignment}""";
-
-        if (Regex.IsMatch(xml, pattern))
-        {
-            return Regex.Replace(xml, pattern, replacement);
-        }
-
-        // If no existing alignment, try to add one after <w:tblPr>
-        var tblPrPattern = @"(<w:tblPr[^>]*>)";
-        var match = Regex.Match(xml, tblPrPattern);
-        if (match.Success)
-        {
-            var tblPrTag = match.Groups[1].Value;
-            return xml.Replace(tblPrTag, $@"{tblPrTag}<w:jc w:val=""{wordAlignment}""/>");
-        }
-
-        return xml;
-    }
 
     #endregion
 

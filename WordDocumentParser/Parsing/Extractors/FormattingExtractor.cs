@@ -1,4 +1,5 @@
 using DocumentFormat.OpenXml.Wordprocessing;
+using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
 
 namespace WordDocumentParser.Parsing.Extractors;
@@ -6,12 +7,26 @@ namespace WordDocumentParser.Parsing.Extractors;
 /// <summary>
 /// Extracts formatting information from OpenXML elements.
 /// </summary>
+/// <remarks>
+/// Enumerated values are stored as their OOXML wire token via <see cref="OoxmlEnum.Token{T}"/>.
+/// Calling <c>ToString()</c> on the SDK's enumeration structs yields <c>"JustificationValues { }"</c>
+/// rather than a name, so the writer's switches never matched what this extractor produced and every
+/// enumerated property was dropped on save.
+/// </remarks>
 internal static class FormattingExtractor
 {
     /// <summary>
     /// Extracts run-level formatting from RunProperties.
+    /// The returned model reports no changes, so the writer treats it as the parsed baseline.
     /// </summary>
     public static RunFormatting ExtractRunFormatting(RunProperties? rPr)
+    {
+        var formatting = ExtractRunFormattingCore(rPr);
+        formatting.AcceptChanges();
+        return formatting;
+    }
+
+    private static RunFormatting ExtractRunFormattingCore(RunProperties? rPr)
     {
         var formatting = new RunFormatting();
         if (rPr is null) return formatting;
@@ -26,7 +41,7 @@ internal static class FormattingExtractor
         if (rPr.Underline is not null)
         {
             formatting.Underline = rPr.Underline.Val?.Value != UnderlineValues.None;
-            formatting.UnderlineStyle = rPr.Underline.Val?.Value.ToString();
+            formatting.UnderlineStyle = OoxmlEnum.Token(rPr.Underline.Val);
         }
 
         // Strike
@@ -51,7 +66,7 @@ internal static class FormattingExtractor
         formatting.Color = rPr.Color?.Val?.Value;
 
         // Highlight
-        formatting.Highlight = rPr.Highlight?.Val?.Value.ToString();
+        formatting.Highlight = OoxmlEnum.Token(rPr.Highlight?.Val);
 
         // Superscript/Subscript
         var vertAlign = rPr.VerticalTextAlignment?.Val?.Value;
@@ -76,8 +91,16 @@ internal static class FormattingExtractor
 
     /// <summary>
     /// Extracts paragraph-level formatting from a Paragraph element.
+    /// The returned model reports no changes, so the writer treats it as the parsed baseline.
     /// </summary>
     public static ParagraphFormatting ExtractParagraphFormatting(Paragraph para, ParsingContext context)
+    {
+        var formatting = ExtractParagraphFormattingCore(para);
+        formatting.AcceptAllChanges();
+        return formatting;
+    }
+
+    private static ParagraphFormatting ExtractParagraphFormattingCore(Paragraph para)
     {
         var formatting = new ParagraphFormatting();
         var pPr = para.ParagraphProperties;
@@ -87,7 +110,7 @@ internal static class FormattingExtractor
         formatting.StyleId = pPr.ParagraphStyleId?.Val?.Value;
 
         // Alignment
-        formatting.Alignment = pPr.Justification?.Val?.Value.ToString();
+        formatting.Alignment = OoxmlEnum.Token(pPr.Justification?.Val);
 
         // Indentation
         var ind = pPr.Indentation;
@@ -106,7 +129,7 @@ internal static class FormattingExtractor
             formatting.SpacingBefore = spacing.Before?.Value;
             formatting.SpacingAfter = spacing.After?.Value;
             formatting.LineSpacing = spacing.Line?.Value;
-            formatting.LineSpacingRule = spacing.LineRule?.Value.ToString();
+            formatting.LineSpacingRule = OoxmlEnum.Token(spacing.LineRule);
         }
 
         // Keep with next/keep lines
@@ -153,17 +176,20 @@ internal static class FormattingExtractor
 
     /// <summary>
     /// Extracts border formatting from a border element.
+    /// The returned model reports no changes, so the writer treats it as the parsed baseline.
     /// </summary>
     public static BorderFormatting? ExtractBorderFormatting(BorderType? border)
     {
         if (border is null) return null;
 
-        return new BorderFormatting
+        var formatting = new BorderFormatting
         {
-            Style = border.Val?.Value.ToString(),
+            Style = OoxmlEnum.Token(border.Val),
             Size = border.Size?.Value.ToString(),
             Color = border.Color?.Value,
             Space = border.Space?.Value.ToString()
         };
+        formatting.AcceptChanges();
+        return formatting;
     }
 }

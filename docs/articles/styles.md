@@ -26,7 +26,9 @@ doc.ChangeStyleWhere(n => n.Text.StartsWith("Note:"), "NoteStyle");
 ```
 
 > [!NOTE]
-> `ChangeStyle` on a heading node updates both the `HeadingLevel` and `Type` properties to match the new style. For example, changing from `Heading1` to `Heading2` sets `HeadingLevel = 2` and may reparent the node in the tree.
+> `ChangeStyle` on a heading node updates both the `HeadingLevel` and `Type` properties to match the new style. For example, changing from `Heading1` to `Heading2` sets `HeadingLevel = 2`.
+>
+> It does **not** move the node: the node keeps its current parent and children, so the tree can end up with a level that no longer matches its position. Re-parse the document if you need the hierarchy rebuilt from the new levels.
 
 ## Querying Style Usage
 

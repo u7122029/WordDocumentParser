@@ -1,131 +1,129 @@
+using WordDocumentParser.Core;
+
 namespace WordDocumentParser.Models.ContentControls;
 
 /// <summary>
-/// Represents properties of a structured document tag (content control)
+/// Properties of a structured document tag (content control).
 /// </summary>
-public class ContentControlProperties
+/// <remarks>
+/// Assignments are tracked (see <see cref="TrackedModel"/>). The writer rewrites the control's
+/// properties in the original SDT only when a caller has actually changed one; an untouched control
+/// passes through with its definition intact, including extension-namespace children such as the
+/// <c>w14:checkbox</c> element that carries a checkbox's state.
+/// </remarks>
+public class ContentControlProperties : TrackedModel
 {
-    /// <summary>
-    /// Unique identifier for the content control
-    /// </summary>
-    public int? Id { get; set; }
+    private int? _id;
+    private string? _tag;
+    private string? _alias;
+    private ContentControlType _type = ContentControlType.Unknown;
+    private string? _placeholderText;
+    private bool _lockContentControl;
+    private bool _lockContents;
+    private string? _dataBindingPrefixMappings;
+    private string? _dataBindingXPath;
+    private string? _dataBindingStoreItemId;
+    private string? _dateFormat;
+    private string? _dateLocale;
+    private DateTime? _dateValue;
+    private List<ContentControlListItem> _listItems = [];
+    private bool _showingPlaceholder;
+    private string? _value;
+    private bool? _isChecked;
+    private string? _color;
+    private string? _appearance;
 
-    /// <summary>
-    /// Tag for the content control (used for programmatic identification)
-    /// </summary>
-    public string? Tag { get; set; }
+    /// <summary>Unique identifier for the content control.</summary>
+    public int? Id { get => _id; set => Set(ref _id, value); }
 
-    /// <summary>
-    /// Alias/Title displayed in the UI
-    /// </summary>
-    public string? Alias { get; set; }
+    /// <summary>Tag used for programmatic identification.</summary>
+    public string? Tag { get => _tag; set => Set(ref _tag, value); }
 
-    /// <summary>
-    /// The type of content control
-    /// </summary>
-    public ContentControlType Type { get; set; } = ContentControlType.Unknown;
+    /// <summary>Alias/title displayed in the Word UI.</summary>
+    public string? Alias { get => _alias; set => Set(ref _alias, value); }
 
-    /// <summary>
-    /// Placeholder text shown when the control is empty
-    /// </summary>
-    public string? PlaceholderText { get; set; }
+    /// <summary>The kind of content control.</summary>
+    public ContentControlType Type { get => _type; set => Set(ref _type, value); }
 
-    /// <summary>
-    /// Whether the content control can be deleted
-    /// </summary>
-    public bool LockContentControl { get; set; }
+    /// <summary>Placeholder text shown when the control is empty.</summary>
+    public string? PlaceholderText { get => _placeholderText; set => Set(ref _placeholderText, value); }
 
-    /// <summary>
-    /// Whether the contents of the content control can be edited
-    /// </summary>
-    public bool LockContents { get; set; }
+    /// <summary>Whether the control itself is protected from deletion.</summary>
+    public bool LockContentControl { get => _lockContentControl; set => Set(ref _lockContentControl, value); }
 
-    /// <summary>
-    /// For document property content controls, the name of the property
-    /// </summary>
-    public string? DataBindingPrefixMappings { get; set; }
+    /// <summary>Whether the control's contents are protected from editing.</summary>
+    public bool LockContents { get => _lockContents; set => Set(ref _lockContents, value); }
 
-    /// <summary>
-    /// XPath for data binding
-    /// </summary>
-    public string? DataBindingXPath { get; set; }
+    /// <summary>Namespace prefix mappings for the data binding.</summary>
+    public string? DataBindingPrefixMappings { get => _dataBindingPrefixMappings; set => Set(ref _dataBindingPrefixMappings, value); }
 
-    /// <summary>
-    /// Store item ID for data binding
-    /// </summary>
-    public string? DataBindingStoreItemId { get; set; }
+    /// <summary>XPath for the data binding.</summary>
+    public string? DataBindingXPath { get => _dataBindingXPath; set => Set(ref _dataBindingXPath, value); }
 
-    /// <summary>
-    /// For date content controls, the date format
-    /// </summary>
-    public string? DateFormat { get; set; }
+    /// <summary>Store item ID for the data binding.</summary>
+    public string? DataBindingStoreItemId { get => _dataBindingStoreItemId; set => Set(ref _dataBindingStoreItemId, value); }
 
-    /// <summary>
-    /// For date content controls, the locale
-    /// </summary>
-    public string? DateLocale { get; set; }
+    /// <summary>Date format string, for date controls.</summary>
+    public string? DateFormat { get => _dateFormat; set => Set(ref _dateFormat, value); }
 
-    /// <summary>
-    /// For date content controls, the current date value
-    /// </summary>
-    public DateTime? DateValue { get; set; }
+    /// <summary>Locale identifier, for date controls.</summary>
+    public string? DateLocale { get => _dateLocale; set => Set(ref _dateLocale, value); }
 
-    /// <summary>
-    /// For dropdown/combobox controls, the list of items
-    /// </summary>
-    public List<ContentControlListItem> ListItems { get; set; } = [];
+    /// <summary>Current value, for date controls.</summary>
+    public DateTime? DateValue { get => _dateValue; set => Set(ref _dateValue, value); }
 
-    /// <summary>
-    /// Whether to show the control as a bounding box
-    /// </summary>
-    public bool ShowingPlaceholder { get; set; }
+    /// <summary>Items offered by a dropdown or combo box control.</summary>
+    public List<ContentControlListItem> ListItems { get => _listItems; set => Set(ref _listItems, value ?? []); }
 
-    /// <summary>
-    /// The current value/text of the content control
-    /// </summary>
-    public string? Value { get; set; }
+    /// <summary>Whether the control is currently showing its placeholder.</summary>
+    public bool ShowingPlaceholder { get => _showingPlaceholder; set => Set(ref _showingPlaceholder, value); }
 
-    /// <summary>
-    /// For checkbox controls, whether it's checked
-    /// </summary>
-    public bool? IsChecked { get; set; }
+    /// <summary>The control's current text value.</summary>
+    public string? Value { get => _value; set => Set(ref _value, value); }
 
-    /// <summary>
-    /// Color of the content control border
-    /// </summary>
-    public string? Color { get; set; }
+    /// <summary>Checked state, for checkbox controls.</summary>
+    public bool? IsChecked { get => _isChecked; set => Set(ref _isChecked, value); }
 
-    /// <summary>
-    /// Appearance setting (BoundingBox, Tags, Hidden, etc.)
-    /// </summary>
-    public string? Appearance { get; set; }
+    /// <summary>Border colour of the control.</summary>
+    public string? Color { get => _color; set => Set(ref _color, value); }
 
-    public ContentControlProperties Clone() => new()
+    /// <summary>Appearance setting, for example <c>"boundingBox"</c>, <c>"tags"</c>, <c>"hidden"</c>.</summary>
+    public string? Appearance { get => _appearance; set => Set(ref _appearance, value); }
+
+    /// <summary>Creates a copy that carries the same pending changes as this instance.</summary>
+    /// <returns>The copy.</returns>
+    public ContentControlProperties Clone()
     {
-        Id = Id,
-        Tag = Tag,
-        Alias = Alias,
-        Type = Type,
-        PlaceholderText = PlaceholderText,
-        LockContentControl = LockContentControl,
-        LockContents = LockContents,
-        DataBindingPrefixMappings = DataBindingPrefixMappings,
-        DataBindingXPath = DataBindingXPath,
-        DataBindingStoreItemId = DataBindingStoreItemId,
-        DateFormat = DateFormat,
-        DateLocale = DateLocale,
-        DateValue = DateValue,
-        ListItems = [.. ListItems.Select(i => i.Clone())],
-        ShowingPlaceholder = ShowingPlaceholder,
-        Value = Value,
-        IsChecked = IsChecked,
-        Color = Color,
-        Appearance = Appearance
-    };
+        var clone = new ContentControlProperties
+        {
+            _id = _id,
+            _tag = _tag,
+            _alias = _alias,
+            _type = _type,
+            _placeholderText = _placeholderText,
+            _lockContentControl = _lockContentControl,
+            _lockContents = _lockContents,
+            _dataBindingPrefixMappings = _dataBindingPrefixMappings,
+            _dataBindingXPath = _dataBindingXPath,
+            _dataBindingStoreItemId = _dataBindingStoreItemId,
+            _dateFormat = _dateFormat,
+            _dateLocale = _dateLocale,
+            _dateValue = _dateValue,
+            _listItems = [.. _listItems.Select(i => i.Clone())],
+            _showingPlaceholder = _showingPlaceholder,
+            _value = _value,
+            _isChecked = _isChecked,
+            _color = _color,
+            _appearance = _appearance
+        };
+        clone.CopyChangesFrom(this);
+        return clone;
+    }
 
     /// <summary>
-    /// Gets a string representation showing metadata about this content control
+    /// Gets a string representation showing metadata about this content control.
     /// </summary>
+    /// <returns>A single-line description.</returns>
     public string ToMetadataString()
     {
         var parts = new List<string> { $"[ContentControl:{Type}" };

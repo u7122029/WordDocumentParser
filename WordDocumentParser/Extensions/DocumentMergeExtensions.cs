@@ -1,7 +1,8 @@
-using System.Text.RegularExpressions;
 using WordDocumentParser.Core;
 using WordDocumentParser.Models.Formatting;
+using WordDocumentParser.Models.Images;
 using WordDocumentParser.Models.Package;
+using WordDocumentParser.Models.Tables;
 
 namespace WordDocumentParser.Extensions;
 
@@ -22,9 +23,7 @@ public static class DocumentMergeExtensions
     /// <returns>The target document (for method chaining)</returns>
     public static WordDocument AppendDocument(this WordDocument target, WordDocument source, bool addPageBreak = true)
     {
-        // Merge resources from source into target
-        var imageIdMapping = MergeImages(target, source);
-        var hyperlinkIdMapping = MergeHyperlinks(target, source);
+        var mapping = MergeResources(target, source);
 
         // Optionally add a page break separator
         if (addPageBreak)
@@ -36,7 +35,7 @@ public static class DocumentMergeExtensions
         // Clone and append all top-level nodes from source
         foreach (var child in source.Root.Children)
         {
-            var clonedNode = CloneNode(child, imageIdMapping, hyperlinkIdMapping);
+            var clonedNode = CloneNode(child, mapping);
             target.Root.AddChild(clonedNode);
         }
 
@@ -87,24 +86,28 @@ public static class DocumentMergeExtensions
     }
 
     /// <summary>
-    /// Creates a shallow clone of a document (clones the tree structure but shares PackageData).
-    /// For a full independent clone, use CloneDocumentDeep.
+    /// Creates an independent copy of a document: the content tree, the package data, and the
+    /// mutable models hanging off both.
     /// </summary>
     /// <param name="source">The document to clone</param>
-    /// <returns>A new document with cloned content tree</returns>
+    /// <returns>A new document that shares no mutable state with the source</returns>
+    /// <remarks>
+    /// Editing the copy leaves the source untouched: the mutable models behind the tree, including
+    /// the table data held in node metadata, are copied rather than shared.
+    /// </remarks>
     public static WordDocument CloneDocument(WordDocument source)
     {
-        var emptyMapping = new Dictionary<string, string>();
-        var clonedRoot = CloneNode(source.Root, emptyMapping, emptyMapping);
+        // Property edits live in a dictionary that is only serialised on save, so flush them first
+        // or the copy inherits the package's stale XML and loses everything set since parsing.
+        source.SyncCustomPropertiesToXml();
 
-        // Create new document with cloned root and copy of package data
-        var result = new WordDocument(clonedRoot)
+        var clonedRoot = CloneNode(source.Root, ResourceMapping.Empty);
+
+        return new WordDocument(clonedRoot)
         {
             FileName = source.FileName,
             PackageData = ClonePackageData(source.PackageData)
         };
-
-        return result;
     }
 
     /// <summary>
@@ -143,55 +146,48 @@ public static class DocumentMergeExtensions
     /// <summary>
     /// Extracts a section from a node tree by heading text.
     /// </summary>
+    /// <param name="root">The node to search under</param>
+    /// <param name="headingText">The heading text to find (case-insensitive partial match)</param>
+    /// <param name="includeNestedHeadings">If true, includes sub-headings; if false, excludes them</param>
+    /// <returns>The heading and its content, or an empty list if the heading was not found</returns>
+    /// <remarks>
+    /// <para>
+    /// The heading is found anywhere in the tree, and its content is whatever the tree nests beneath
+    /// it. The tree is built by heading hierarchy, so an H2 is a child of its H1 rather than a
+    /// sibling, and a flat scan of the root's children would never reach it.
+    /// </para>
+    /// <para>
+    /// With <paramref name="includeNestedHeadings"/> false, sub-headings and their content are left
+    /// out; only the heading's own direct content comes back, as a detached copy.
+    /// </para>
+    /// </remarks>
     public static List<DocumentNode> ExtractSection(this DocumentNode root, string headingText, bool includeNestedHeadings = true)
     {
-        var result = new List<DocumentNode>();
-        var allNodes = root.Children.ToList();
+        var heading = root.FindSectionHeading(headingText);
+        if (heading is null)
+            return [];
 
-        // Find the starting heading
-        int startIndex = -1;
-        int headingLevel = 0;
+        // The tree nests a section's content under its heading, so the heading node is the section.
+        if (includeNestedHeadings)
+            return [heading];
 
-        for (int i = 0; i < allNodes.Count; i++)
-        {
-            var node = allNodes[i];
-            if (node.Type == ContentType.Heading &&
-                node.GetText().Contains(headingText, StringComparison.OrdinalIgnoreCase))
-            {
-                startIndex = i;
-                headingLevel = node.HeadingLevel;
-                break;
-            }
-        }
-
-        if (startIndex < 0)
-            return result;
-
-        // Collect nodes until we hit another heading of same or higher level
-        for (int i = startIndex; i < allNodes.Count; i++)
-        {
-            var node = allNodes[i];
-
-            // Check if this is a heading that ends our section
-            if (i > startIndex && node.Type == ContentType.Heading)
-            {
-                if (!includeNestedHeadings)
-                {
-                    // Stop at any heading
-                    break;
-                }
-                else if (node.HeadingLevel <= headingLevel)
-                {
-                    // Stop at same level or higher (lower number = higher level)
-                    break;
-                }
-            }
-
-            result.Add(node);
-        }
-
-        return result;
+        // Excluding sub-headings means returning a copy: the sub-headings are children of the live
+        // heading, so leaving them out of the list would not actually leave them out of the section.
+        var trimmed = CloneNode(heading, ResourceMapping.Empty);
+        trimmed.Children.RemoveAll(child => child.Type == ContentType.Heading);
+        return [trimmed];
     }
+
+    /// <summary>
+    /// Finds the heading that starts a section, anywhere in the tree.
+    /// </summary>
+    /// <param name="root">The node to search under.</param>
+    /// <param name="headingText">The heading text to find (case-insensitive partial match).</param>
+    /// <returns>The heading node, or null when no heading matches.</returns>
+    internal static DocumentNode? FindSectionHeading(this DocumentNode root, string headingText) =>
+        root.FindAll(n =>
+            n.Type == ContentType.Heading &&
+            n.GetText().Contains(headingText, StringComparison.OrdinalIgnoreCase)).FirstOrDefault();
 
     /// <summary>
     /// Extracts nodes from a document that match a predicate.
@@ -351,17 +347,14 @@ public static class DocumentMergeExtensions
         IEnumerable<DocumentNode> sourceNodes,
         WordDocument source)
     {
-        // Merge resources from source into target
-        var imageIdMapping = MergeImages(target, source);
-        var hyperlinkIdMapping = MergeHyperlinks(target, source);
+        var mapping = MergeResources(target, source);
 
-        // Clone and insert nodes
         var nodesToInsert = sourceNodes.ToList();
-        var insertIndex = Math.Min(index, parent.Children.Count);
+        var insertIndex = Math.Clamp(index, 0, parent.Children.Count);
 
-        for (int i = 0; i < nodesToInsert.Count; i++)
+        for (var i = 0; i < nodesToInsert.Count; i++)
         {
-            var clonedNode = CloneNode(nodesToInsert[i], imageIdMapping, hyperlinkIdMapping);
+            var clonedNode = CloneNode(nodesToInsert[i], mapping);
             clonedNode.Parent = parent;
             parent.Children.Insert(insertIndex + i, clonedNode);
         }
@@ -431,6 +424,10 @@ public static class DocumentMergeExtensions
     /// <param name="sourceHeadingText">Text of the section heading to copy from source</param>
     /// <param name="includeNestedHeadings">Whether to include sub-headings</param>
     /// <returns>The target document (for method chaining)</returns>
+    /// <remarks>
+    /// Both sections are located before anything is removed, so a missing source section leaves the
+    /// target exactly as it was rather than destroying the section it was asked to replace.
+    /// </remarks>
     public static WordDocument ReplaceSection(
         this WordDocument target,
         string targetHeadingText,
@@ -438,28 +435,21 @@ public static class DocumentMergeExtensions
         string sourceHeadingText,
         bool includeNestedHeadings = true)
     {
-        // Find and remove the target section
-        var targetSection = target.ExtractSection(targetHeadingText, includeNestedHeadings);
-        if (targetSection.Count == 0)
-            throw new ArgumentException($"Section '{targetHeadingText}' not found in target document", nameof(targetHeadingText));
+        // The live heading, so it can be detached from its parent below.
+        var targetHeading = target.Root.FindSectionHeading(targetHeadingText)
+                            ?? throw new ArgumentException(
+                                $"Section '{targetHeadingText}' not found in target document", nameof(targetHeadingText));
 
-        var firstNode = targetSection[0];
-        var parent = firstNode.Parent;
-        if (parent == null)
-            throw new InvalidOperationException("Section has no parent");
-
-        var insertIndex = parent.Children.IndexOf(firstNode);
-
-        // Remove the old section
-        foreach (var node in targetSection)
-        {
-            parent.Children.Remove(node);
-        }
-
-        // Extract and insert the source section
+        // Validate the replacement before touching the target.
         var sourceSection = source.ExtractSection(sourceHeadingText, includeNestedHeadings);
         if (sourceSection.Count == 0)
             throw new ArgumentException($"Section '{sourceHeadingText}' not found in source document", nameof(sourceHeadingText));
+
+        var parent = targetHeading.Parent
+                     ?? throw new InvalidOperationException("Section has no parent");
+
+        var insertIndex = parent.Children.IndexOf(targetHeading);
+        parent.Children.Remove(targetHeading);
 
         return target.InsertNodesAtIndex(parent, insertIndex, sourceSection, source);
     }
@@ -469,91 +459,71 @@ public static class DocumentMergeExtensions
     #region Resource Merging
 
     /// <summary>
-    /// Merges images from the source document into the target document.
-    /// Returns a mapping from old relationship IDs to new relationship IDs.
+    /// How a source document's resources were renamed to fit into a target document.
     /// </summary>
-    private static Dictionary<string, string> MergeImages(WordDocument target, WordDocument source)
+    internal sealed class ResourceMapping
     {
-        var mapping = new Dictionary<string, string>();
+        /// <summary>A mapping that renames nothing, for cloning within one document.</summary>
+        public static ResourceMapping Empty { get; } = new();
 
-        foreach (var kvp in source.PackageData.Images)
+        /// <summary>Source relationship ID to target relationship ID.</summary>
+        public Dictionary<string, string> Relationships { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Source numbering ID to target numbering ID.</summary>
+        public Dictionary<int, int> Numbering { get; } = [];
+
+        /// <summary>True when nothing needs rewriting.</summary>
+        public bool IsEmpty => Relationships.Count == 0 && Numbering.Count == 0;
+    }
+
+    /// <summary>
+    /// Copies the source document's images, hyperlinks, and numbering definitions into the target.
+    /// </summary>
+    /// <remarks>
+    /// All relationship IDs come from one allocator over the target's whole relationship namespace.
+    /// Allocating per resource kind handed out IDs another kind already held: merging images into a
+    /// document whose hyperlink was <c>rId1000</c> reassigned that ID and broke the link.
+    /// </remarks>
+    private static ResourceMapping MergeResources(WordDocument target, WordDocument source)
+    {
+        var mapping = new ResourceMapping();
+        var packageData = target.PackageData;
+
+        foreach (var (oldId, imageData) in source.PackageData.Images)
         {
-            var oldId = kvp.Key;
-            var imageData = kvp.Value;
+            var newId = packageData.AllocateRelationshipId();
 
-            // Generate a new unique ID that doesn't conflict with existing IDs
-            var newId = GenerateUniqueRelationshipId(target.PackageData.Images.Keys, "rId");
-
-            // Add the image to the target document with the new ID
-            target.PackageData.Images[newId] = new ImagePartData
+            packageData.Images[newId] = new ImagePartData
             {
                 ContentType = imageData.ContentType,
+                // Media bytes are shared and treated as immutable, so the copy references them.
                 Data = imageData.Data,
                 OriginalRelationshipId = newId,
                 OriginalUri = imageData.OriginalUri
             };
 
-            mapping[oldId] = newId;
+            mapping.Relationships[oldId] = newId;
         }
 
-        return mapping;
-    }
-
-    /// <summary>
-    /// Merges hyperlinks from the source document into the target document.
-    /// Returns a mapping from old relationship IDs to new relationship IDs.
-    /// </summary>
-    private static Dictionary<string, string> MergeHyperlinks(WordDocument target, WordDocument source)
-    {
-        var mapping = new Dictionary<string, string>();
-
-        foreach (var kvp in source.PackageData.HyperlinkRelationships)
+        foreach (var (oldId, hyperlinkData) in source.PackageData.HyperlinkRelationships)
         {
-            var oldId = kvp.Key;
-            var hyperlinkData = kvp.Value;
+            var newId = packageData.AllocateRelationshipId();
 
-            // Generate a new unique ID
-            var existingIds = target.PackageData.HyperlinkRelationships.Keys
-                .Concat(target.PackageData.Images.Keys)
-                .ToHashSet();
-            var newId = GenerateUniqueRelationshipId(existingIds, "rId");
-
-            target.PackageData.HyperlinkRelationships[newId] = new HyperlinkRelationshipData
+            packageData.HyperlinkRelationships[newId] = new HyperlinkRelationshipData
             {
                 Url = hyperlinkData.Url,
                 IsExternal = hyperlinkData.IsExternal
             };
 
-            mapping[oldId] = newId;
+            mapping.Relationships[oldId] = newId;
+        }
+
+        foreach (var (oldNumId, newNumId) in NumberingMerge.Merge(target, source))
+        {
+            mapping.Numbering[oldNumId] = newNumId;
         }
 
         return mapping;
-    }
-
-    /// <summary>
-    /// Generates a unique relationship ID that doesn't conflict with existing IDs.
-    /// </summary>
-    private static string GenerateUniqueRelationshipId(IEnumerable<string> existingIds, string prefix)
-    {
-        var existing = existingIds.ToHashSet();
-        var maxId = 0;
-
-        foreach (var id in existing)
-        {
-            if (id.StartsWith(prefix) && int.TryParse(id[prefix.Length..], out var num))
-            {
-                maxId = Math.Max(maxId, num);
-            }
-        }
-
-        // Start from a high number to avoid conflicts
-        var newNum = Math.Max(maxId + 1, 1000);
-        while (existing.Contains($"{prefix}{newNum}"))
-        {
-            newNum++;
-        }
-
-        return $"{prefix}{newNum}";
     }
 
     #endregion
@@ -573,34 +543,32 @@ public static class DocumentMergeExtensions
         WordDocument source,
         IEnumerable<DocumentNode> nodes)
     {
-        var imageIdMapping = MergeImages(target, source);
-        var hyperlinkIdMapping = MergeHyperlinks(target, source);
-
-        return nodes.Select(n => CloneNode(n, imageIdMapping, hyperlinkIdMapping)).ToList();
+        var mapping = MergeResources(target, source);
+        return nodes.Select(node => CloneNode(node, mapping)).ToList();
     }
 
     /// <summary>
     /// Deep clones a single node from a source document, updating resource references for use in the target document.
     /// </summary>
+    /// <param name="target">The target document (resources will be merged into this)</param>
+    /// <param name="source">The source document</param>
+    /// <param name="node">The node to clone</param>
+    /// <returns>The cloned node, ready to be added to the target document</returns>
     public static DocumentNode CloneNodeForDocument(
         this WordDocument target,
         WordDocument source,
         DocumentNode node)
-    {
-        var imageIdMapping = MergeImages(target, source);
-        var hyperlinkIdMapping = MergeHyperlinks(target, source);
-
-        return CloneNode(node, imageIdMapping, hyperlinkIdMapping);
-    }
+        => CloneNode(node, MergeResources(target, source));
 
     /// <summary>
-    /// Deep clones a document node and all its children.
-    /// Updates any relationship IDs (images, hyperlinks) using the provided mappings.
+    /// Deep clones a document node and everything hanging off it, rewriting resource references.
     /// </summary>
-    internal static DocumentNode CloneNode(
-        DocumentNode source,
-        Dictionary<string, string> imageIdMapping,
-        Dictionary<string, string> hyperlinkIdMapping)
+    /// <remarks>
+    /// Every mutable model is copied, including the table data held in metadata. Copying metadata
+    /// values by reference meant a concatenated document shared its tables with the document it was
+    /// built from, so editing one edited both.
+    /// </remarks>
+    internal static DocumentNode CloneNode(DocumentNode source, ResourceMapping mapping)
     {
         var clone = new DocumentNode(source.Type)
         {
@@ -608,89 +576,155 @@ public static class DocumentMergeExtensions
             HeadingLevel = source.HeadingLevel,
             Text = source.Text,
             ParagraphFormatting = source.ParagraphFormatting?.Clone(),
-            OriginalXml = UpdateRelationshipIds(source.OriginalXml, imageIdMapping, hyperlinkIdMapping),
+            OriginalXml = RewriteReferences(source.OriginalXml, mapping),
             ContentControlProperties = source.ContentControlProperties?.Clone()
         };
 
-        // Clone metadata
-        foreach (var kvp in source.Metadata)
+        foreach (var (key, value) in source.Metadata)
         {
-            clone.Metadata[kvp.Key] = kvp.Value;
+            clone.Metadata[key] = CloneMetadataValue(value, mapping);
         }
 
-        // Clone formatted runs
         foreach (var run in source.Runs)
         {
-            var clonedRun = new FormattedRun(run.Text)
-            {
-                Formatting = run.Formatting?.Clone() ?? new RunFormatting(),
-                IsTab = run.IsTab,
-                IsBreak = run.IsBreak,
-                BreakType = run.BreakType,
-                DocumentPropertyField = run.DocumentPropertyField,
-                ContentControlProperties = run.ContentControlProperties?.Clone()
-            };
-            clone.Runs.Add(clonedRun);
+            clone.Runs.Add(run.Clone());
         }
 
-        // Recursively clone children
-        // IMPORTANT: Skip Image children if the parent has OriginalXml, because:
-        // 1. The OriginalXml already contains the image XML with updated relationship IDs
-        // 2. The writer would otherwise write the image twice (once from OriginalXml, once from child node)
-        // This prevents duplicate images appearing on top of each other
+        if (clone.ParagraphFormatting is { NumberingId: { } numberingId } formatting &&
+            mapping.Numbering.TryGetValue(numberingId, out var newNumberingId))
+        {
+            formatting.NumberingId = newNumberingId;
+        }
+
+        // Skip Image children when the parent has OriginalXml: the image is already in that XML with
+        // its rewritten relationship ID, and writing the child too would stack a duplicate on top.
         var hasOriginalXml = !string.IsNullOrEmpty(source.OriginalXml);
 
         foreach (var child in source.Children)
         {
-            // Skip Image children when parent has OriginalXml - they're already embedded in the XML
             if (hasOriginalXml && child.Type == ContentType.Image)
             {
                 continue;
             }
 
-            var clonedChild = CloneNode(child, imageIdMapping, hyperlinkIdMapping);
-            clone.AddChild(clonedChild);
+            clone.AddChild(CloneNode(child, mapping));
+        }
+
+        // The clone reproduces the source exactly, including whatever edits were pending on it, so
+        // it inherits the source's change state rather than presenting itself as freshly parsed.
+        if (!source.HasChanges)
+        {
+            clone.AcceptAllChanges();
         }
 
         return clone;
     }
 
     /// <summary>
-    /// Updates relationship IDs in OriginalXml to use the new mapped IDs.
+    /// Copies a metadata value, deep-copying the mutable models the library stores there.
     /// </summary>
-    private static string? UpdateRelationshipIds(
-        string? originalXml,
-        Dictionary<string, string> imageIdMapping,
-        Dictionary<string, string> hyperlinkIdMapping)
+    private static object CloneMetadataValue(object value, ResourceMapping mapping) => value switch
     {
-        if (string.IsNullOrEmpty(originalXml))
+        TableData tableData => CloneTableData(tableData, mapping),
+        List<HyperlinkData> hyperlinks => hyperlinks.Select(link => CloneHyperlink(link, mapping)).ToList(),
+        ImageData imageData => CloneImageData(imageData, mapping),
+        _ => value
+    };
+
+    private static TableData CloneTableData(TableData source, ResourceMapping mapping)
+    {
+        var clone = new TableData
+        {
+            ColumnCount = source.ColumnCount,
+            Formatting = source.Formatting?.Clone()
+        };
+
+        foreach (var row in source.Rows)
+        {
+            var clonedRow = new TableRow
+            {
+                RowIndex = row.RowIndex,
+                IsHeader = row.IsHeader,
+                Formatting = row.Formatting?.Clone()
+            };
+
+            foreach (var cell in row.Cells)
+            {
+                var clonedCell = new TableCell
+                {
+                    RowIndex = cell.RowIndex,
+                    ColumnIndex = cell.ColumnIndex,
+                    RowSpan = cell.RowSpan,
+                    ColSpan = cell.ColSpan,
+                    Formatting = cell.Formatting?.Clone()
+                };
+
+                foreach (var content in cell.Content)
+                {
+                    clonedCell.Content.Add(CloneNode(content, mapping));
+                }
+
+                clonedRow.Cells.Add(clonedCell);
+            }
+
+            clone.Rows.Add(clonedRow);
+        }
+
+        if (!source.HasTableChanges)
+        {
+            clone.AcceptAllChanges();
+        }
+
+        return clone;
+    }
+
+    private static HyperlinkData CloneHyperlink(HyperlinkData source, ResourceMapping mapping) => new()
+    {
+        Text = source.Text,
+        RelationshipId = source.RelationshipId is { } id && mapping.Relationships.TryGetValue(id, out var newId)
+            ? newId
+            : source.RelationshipId,
+        Url = source.Url,
+        Anchor = source.Anchor,
+        Tooltip = source.Tooltip,
+        Runs = source.Runs.Select(run => run.Clone()).ToList()
+    };
+
+    private static ImageData CloneImageData(ImageData source, ResourceMapping mapping) => new()
+    {
+        Id = mapping.Relationships.TryGetValue(source.Id, out var newId) ? newId : source.Id,
+        Name = source.Name,
+        ContentType = source.ContentType,
+        // Media bytes are shared and treated as immutable.
+        Data = source.Data,
+        WidthInches = source.WidthInches,
+        HeightInches = source.HeightInches,
+        AltText = source.AltText,
+        Description = source.Description,
+        WidthEmu = source.WidthEmu,
+        HeightEmu = source.HeightEmu,
+        Formatting = source.Formatting
+    };
+
+    /// <summary>
+    /// Rewrites the relationship and numbering references in a node's XML.
+    /// </summary>
+    private static string? RewriteReferences(string? originalXml, ResourceMapping mapping)
+    {
+        if (string.IsNullOrEmpty(originalXml) || mapping.IsEmpty)
             return originalXml;
 
         var result = originalXml;
 
-        // Update image relationship IDs (r:embed="rIdX" or r:link="rIdX")
-        foreach (var kvp in imageIdMapping)
+        foreach (var (oldId, newId) in mapping.Relationships)
         {
-            result = Regex.Replace(
-                result,
-                $@"(r:embed=""){Regex.Escape(kvp.Key)}("")",
-                $"$1{kvp.Value}$2");
-            result = Regex.Replace(
-                result,
-                $@"(r:link=""){Regex.Escape(kvp.Key)}("")",
-                $"$1{kvp.Value}$2");
+            result = result
+                .Replace($"r:embed=\"{oldId}\"", $"r:embed=\"{newId}\"")
+                .Replace($"r:link=\"{oldId}\"", $"r:link=\"{newId}\"")
+                .Replace($"r:id=\"{oldId}\"", $"r:id=\"{newId}\"");
         }
 
-        // Update hyperlink relationship IDs (r:id="rIdX")
-        foreach (var kvp in hyperlinkIdMapping)
-        {
-            result = Regex.Replace(
-                result,
-                $@"(r:id=""){Regex.Escape(kvp.Key)}("")",
-                $"$1{kvp.Value}$2");
-        }
-
-        return result;
+        return NumberingMerge.ApplyMapping(result, mapping.Numbering);
     }
 
     /// <summary>
@@ -714,46 +748,19 @@ public static class DocumentMergeExtensions
             GlossaryDocumentXml = source.GlossaryDocumentXml,
             GlossaryStylesXml = source.GlossaryStylesXml,
             GlossaryFontTableXml = source.GlossaryFontTableXml,
-            OriginalDocumentXml = source.OriginalDocumentXml
+            OriginalDocumentXml = source.OriginalDocumentXml,
+
+            // The source package is immutable once captured, so the copy shares the same bytes and
+            // keeps the ability to save with everything the model does not represent intact.
+            OriginalPackageBytes = source.OriginalPackageBytes,
+            Baseline = source.Baseline,
+            KnownRelationshipIds = new HashSet<string>(source.KnownRelationshipIds, StringComparer.Ordinal)
         };
 
-        // Clone core and extended properties
-        if (source.CoreProperties != null)
-        {
-            clone.CoreProperties = new CoreProperties
-            {
-                Title = source.CoreProperties.Title,
-                Subject = source.CoreProperties.Subject,
-                Creator = source.CoreProperties.Creator,
-                Keywords = source.CoreProperties.Keywords,
-                Description = source.CoreProperties.Description,
-                LastModifiedBy = source.CoreProperties.LastModifiedBy,
-                Revision = source.CoreProperties.Revision,
-                Created = source.CoreProperties.Created,
-                Modified = source.CoreProperties.Modified,
-                Category = source.CoreProperties.Category,
-                ContentStatus = source.CoreProperties.ContentStatus
-            };
-        }
-
-        if (source.ExtendedProperties != null)
-        {
-            clone.ExtendedProperties = new ExtendedProperties
-            {
-                Template = source.ExtendedProperties.Template,
-                Application = source.ExtendedProperties.Application,
-                AppVersion = source.ExtendedProperties.AppVersion,
-                Company = source.ExtendedProperties.Company,
-                Manager = source.ExtendedProperties.Manager,
-                Pages = source.ExtendedProperties.Pages,
-                Words = source.ExtendedProperties.Words,
-                Characters = source.ExtendedProperties.Characters,
-                CharactersWithSpaces = source.ExtendedProperties.CharactersWithSpaces,
-                Lines = source.ExtendedProperties.Lines,
-                Paragraphs = source.ExtendedProperties.Paragraphs,
-                TotalTime = source.ExtendedProperties.TotalTime
-            };
-        }
+        // Clone core and extended properties, carrying their pending changes so a removal made
+        // before cloning is not lost in the copy.
+        clone.CoreProperties = source.CoreProperties?.Clone();
+        clone.ExtendedProperties = source.ExtendedProperties?.Clone();
 
         // Clone dictionaries
         foreach (var kvp in source.Headers)

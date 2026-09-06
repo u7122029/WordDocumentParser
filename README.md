@@ -369,18 +369,34 @@ var allText = section.GetAllText();     // Recursive text extraction
 
 ## Round-Trip Fidelity
 
-The library preserves the following when parsing and writing back:
+Saving edits a copy of the source package rather than reassembling one from the model, and applies only the changes you actually made. So anything you don't touch is carried over — including parts this library has no model for:
 
 - **Styles**: All paragraph and character styles, theme, font table
 - **Formatting**: Bold, italic, underline, fonts, colors, spacing, borders, shading
-- **Document Properties**: Core, extended, and custom properties
-- **Content Controls**: All SDT types with properties and data binding
+- **Document Properties**: Core, extended, and custom properties, including their declared types
+- **Content Controls**: All SDT types with properties and data binding, including `w14`/`w15`/`w16` extension elements such as checkbox state
 - **Dynamic References**: DOCPROPERTY fields, TOC, BIBLIOGRAPHY, CITATION
-- **Structure**: Headers, footers, sections, page layout, numbering definitions
+- **Structure**: Headers, footers and the relationships they own, sections, page layout, numbering definitions
 - **Media**: Images with dimensions, alt text, and positioning
 - **Tables**: Cell merging, borders, shading, column widths, nested tables — structural modifications (add/insert/remove rows and columns) preserve the original table style
 - **Hyperlinks**: External URLs and internal anchors with relationship preservation
 - **Glossary**: Building blocks, Quick Parts, custom XML parts
+- **Everything else**: Comments, tracked changes, embedded objects, charts, ink, and any other part
+
+Documents you build in code have no source package, so they contain only what the model represents. See [Round-Trip Fidelity](docs/articles/round-trip.md) for the full boundaries, failure behaviour, and concurrency rules.
+
+### Untrusted Input
+
+A `.docx` is a zip archive whose parts decompress to a size its author chooses. Parsing applies no bounds by default; pass `DocumentLimits.Untrusted` for documents that didn't come from you:
+
+```csharp
+using var parser = new WordDocumentTreeParser { Limits = DocumentLimits.Untrusted };
+var doc = parser.ParseFromFile(uploadedPath);
+```
+
+### Failure Behaviour
+
+A part that can't be preserved throws `DocumentPreservationException` rather than being dropped silently, so a lossy result is never reported as a faithful one. Set `RecoveryOptions.ContinueOnPreservationFailure` to salvage what you can and inspect `Diagnostics` afterwards. Saving is atomic — the package is built in memory and staged beside the destination, so a failure leaves any existing file intact.
 
 ## Project Structure
 
@@ -393,7 +409,11 @@ WordDocumentParser/
 │   ├── Core/
 │   │   ├── IDocumentParser.cs
 │   │   ├── IDocumentWriter.cs
-│   │   └── ContentType.cs
+│   │   ├── ContentType.cs
+│   │   ├── TrackedModel.cs               # Records which properties a caller assigned
+│   │   ├── OoxmlEnum.cs                  # Typed enum <-> OOXML token conversion
+│   │   ├── DocumentLimits.cs             # Bounds for untrusted input
+│   │   └── DocumentPreservationException.cs
 │   ├── Models/
 │   │   ├── Formatting/                   # RunFormatting, ParagraphFormatting, TableFormatting, etc.
 │   │   ├── ContentControls/              # ContentControlProperties, ContentControlType
@@ -411,13 +431,23 @@ WordDocumentParser/
 │   │   ├── DocumentPropertyExtensions.cs # Document property field operations
 │   │   └── SerializationExtensions.cs    # SaveToFile, SaveToStream, ToDocxBytes
 │   ├── Parsing/
-│   │   ├── ParsingContext.cs             # Style cache, hyperlink resolution
+│   │   ├── ParsingContext.cs             # Style cache, hyperlink resolution, shared media buffers
 │   │   └── Extractors/                   # FormattingExtractor, ImageExtractor, TableExtractor
+│   ├── Writing/
+│   │   ├── DocumentWriteSession.cs       # Per-write state; edits a copy of the source package
+│   │   ├── ParagraphEditor.cs            # Applies node edits onto original paragraph XML
+│   │   ├── RunEditor.cs                  # Maps edited runs onto existing runs by offset
+│   │   ├── TableEditor.cs                # Applies table edits onto original table XML
+│   │   ├── TableBuilder.cs               # Builds tables created in code
+│   │   ├── DefaultParts.cs               # Styles and numbering for new documents
+│   │   └── OoxmlOrder.cs                 # Schema-ordered property insertion
 │   ├── WordDocument.cs                   # Main document wrapper
 │   ├── DocumentNode.cs                   # Tree node
 │   ├── DocumentPropertyHelpers.cs        # Property name/type utilities
 │   ├── WordDocumentTreeParser.cs         # Parser with heading hierarchy inference
-│   └── WordDocumentTreeWriter.cs         # Writer with OriginalXml preservation
+│   └── WordDocumentTreeWriter.cs         # Writer facade
+│
+├── WordDocumentParser.Tests/             # Regression tests (xUnit)
 │
 └── WordDocumentParser.Demo/              # Demo application
     ├── Program.cs
@@ -434,7 +464,7 @@ WordDocumentParser/
         └── Styles/                       # ParagraphStyleDemo
 ```
 
-## Building
+## Building and Testing
 
 ```bash
 # Build the entire solution
@@ -443,9 +473,14 @@ dotnet build
 # Build only the library
 dotnet build WordDocumentParser/WordDocumentParser.csproj
 
-# Run the demo
-dotnet run --project WordDocumentParser.Demo
+# Run the regression tests
+dotnet test
+
+# Run the demo against a document (defaults to SampleDocument.docx)
+dotnet run --project WordDocumentParser.Demo -- path/to/document.docx
 ```
+
+CI builds with `-warnaserror`. `GenerateDocumentationFile` is on, so a public member without XML documentation fails the build.
 
 ## License
 

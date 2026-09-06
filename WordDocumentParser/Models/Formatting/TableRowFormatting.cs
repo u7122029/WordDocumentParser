@@ -1,20 +1,41 @@
+using WordDocumentParser.Core;
+
 namespace WordDocumentParser.Models.Formatting;
 
 /// <summary>
-/// Represents table row formatting
+/// Table row formatting.
 /// </summary>
-public class TableRowFormatting
+public class TableRowFormatting : TrackedModel
 {
-    public string? Height { get; set; }
-    public string? HeightRule { get; set; } // Auto, Exact, AtLeast
-    public bool IsHeader { get; set; }
-    public bool CantSplit { get; set; }
+    private string? _height;
+    private string? _heightRule;
+    private bool _isHeader;
+    private bool _cantSplit;
 
-    public TableRowFormatting Clone() => new()
+    /// <summary>Row height in twips.</summary>
+    public string? Height { get => _height; set => Set(ref _height, value); }
+
+    /// <summary>Height rule as an OOXML token: <c>"auto"</c>, <c>"exact"</c>, <c>"atLeast"</c>.</summary>
+    public string? HeightRule { get => _heightRule; set => Set(ref _heightRule, value); }
+
+    /// <summary>Repeat this row as a header at the top of each page.</summary>
+    public bool IsHeader { get => _isHeader; set => Set(ref _isHeader, value); }
+
+    /// <summary>Prevent this row from splitting across pages.</summary>
+    public bool CantSplit { get => _cantSplit; set => Set(ref _cantSplit, value); }
+
+    /// <summary>Creates a copy that carries the same pending changes as this instance.</summary>
+    /// <returns>The copy.</returns>
+    public TableRowFormatting Clone()
     {
-        Height = Height,
-        HeightRule = HeightRule,
-        IsHeader = IsHeader,
-        CantSplit = CantSplit
-    };
+        var clone = new TableRowFormatting
+        {
+            _height = _height,
+            _heightRule = _heightRule,
+            _isHeader = _isHeader,
+            _cantSplit = _cantSplit
+        };
+        clone.CopyChangesFrom(this);
+        return clone;
+    }
 }

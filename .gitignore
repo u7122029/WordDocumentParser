@@ -8,6 +8,9 @@
 **/*~
 **/obj/
 **/.*/
+# The CI definition has to be tracked for it to run, so exempt it from the dot-directory rule above.
+!.github/
+!.github/**
 **/*.csx
 **/*.docx
 _site/
