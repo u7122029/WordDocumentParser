@@ -15,19 +15,33 @@ namespace WordDocumentParser.Writing;
 /// bookmarks, comment anchors, and drawings — on any edit at all, however unrelated.
 /// </para>
 /// <para>
-/// Model runs are matched to XML runs by character offset. Because both sides describe the same
-/// text, a caller's edit maps to an exact range even when the model runs were split — which is what
-/// <c>SetFontForText</c> does — and the XML run is split to match rather than the paragraph being
-/// rebuilt.
+/// Model runs use source identity when text or run order changes. Each edited slice retains its
+/// source formatting and container. Character offsets suffice when the original sequence and text
+/// still match, and XML runs are split where a formatting boundary requires it.
 /// </para>
 /// </remarks>
 internal static class RunEditor
 {
     /// <summary>
-    /// One text-bearing piece of the paragraph: a single <c>w:t</c>, <c>w:tab</c>, or <c>w:br</c>
-    /// together with the run that owns it. Enumerated in the same order, and with the same field
-    /// handling, that the parser used to produce the model runs, so the two sides line up.
+    /// One field in the paragraph — its delimiters, instruction, and result runs in document order.
     /// </summary>
+    /// <remarks>
+    /// A field computes its own text, so the construct is the unit of both deletion and formatting.
+    /// Emptying a result element leaves the field to regenerate its value, which is why removing the
+    /// text a field contributed means removing the whole thing.
+    /// </remarks>
+    private sealed class FieldConstruct
+    {
+        public required List<Run> Runs { get; init; }
+
+        /// <summary>
+        /// True when the parser collapsed this field's result into a single model run, which it does
+        /// for <c>DOCPROPERTY</c>. Other fields keep one piece per result element.
+        /// </summary>
+        public required bool IsCollapsed { get; init; }
+    }
+
+    /// <summary>A text, tab, break, or collapsed field, in the parser's enumeration order.</summary>
     private sealed class RunPiece
     {
         /// <summary>The run that currently owns this piece. Splitting reassigns it.</summary>
@@ -37,17 +51,16 @@ internal static class RunEditor
         public required string Text { get; init; }
 
         /// <summary>
-        /// Every run making up the field this piece stands for — delimiters, code, and result —
-        /// in document order, or null when the piece is ordinary content.
+        /// This piece's position in the paragraph's enumeration, matching the
+        /// <see cref="FormattedRun.SourceOrdinal"/> the parser stamped on the run it produced.
         /// </summary>
-        /// <remarks>
-        /// A field computes its own text, so the whole construct is the unit of deletion and of
-        /// formatting; emptying the result element alone would leave the field to regenerate it.
-        /// </remarks>
-        public List<Run>? FieldRuns { get; init; }
+        public int Ordinal { get; set; }
 
-        /// <summary>True when this piece stands for a whole field rather than one text element.</summary>
-        public bool IsField => FieldRuns is not null;
+        /// <summary>The field this piece's text comes from, or null for ordinary content.</summary>
+        public FieldConstruct? Field { get; init; }
+
+        /// <summary>True when this piece stands for a whole collapsed field.</summary>
+        public bool IsCollapsedField => Field is { IsCollapsed: true };
     }
 
     /// <summary>
@@ -92,15 +105,7 @@ internal static class RunEditor
     {
         // Fields contribute text the paragraph no longer has. Emptying their result element would
         // not remove them — the field would recompute its value — so the construct goes entirely.
-        foreach (var piece in pieces)
-        {
-            if (piece.FieldRuns is null) continue;
-
-            foreach (var fieldRun in piece.FieldRuns)
-            {
-                fieldRun.Remove();
-            }
-        }
+        RemoveFields(pieces.Select(piece => piece.Field));
 
         var textPieces = pieces.FindAll(piece => piece.Content is Text && piece.Run.Parent is not null);
 
@@ -134,13 +139,18 @@ internal static class RunEditor
     /// </summary>
     private static void ApplyModelRuns(Paragraph paragraph, List<RunPiece> pieces, List<FormattedRun> modelRuns)
     {
-        var aligned = Align(pieces, modelRuns);
+        // A deleted field can leave the paragraph's text unchanged, so offsets cannot detect it.
+        var sourceSequenceChanged = modelRuns.Any(run => run.SourceOrdinal.HasValue) &&
+            (modelRuns.Count != pieces.Count ||
+             modelRuns.Where((run, index) => run.SourceOrdinal != index).Any() ||
+             pieces.Any(piece => piece.Text.Length == 0));
+        var aligned = sourceSequenceChanged || HasDeletedField(pieces, modelRuns)
+            ? null : Align(pieces, modelRuns);
 
         if (aligned is null)
         {
             // The model's text no longer matches the paragraph's, so offsets cannot be trusted.
-            // Rewrite the text through the existing runs and apply formatting positionally, which
-            // still keeps hyperlink and field containers intact.
+            // Reconcile source identities in the model's order, retaining their XML containers.
             RewriteWithoutAlignment(paragraph, pieces, modelRuns);
             return;
         }
@@ -159,10 +169,10 @@ internal static class RunEditor
 
             if (!modelRun.Formatting.HasChanges) continue;
 
-            if (piece.IsField)
+            if (piece.IsCollapsedField)
             {
-                // A field's formatting belongs to the whole construct.
-                foreach (var fieldRun in piece.FieldRuns!)
+                // The model has one run for the whole field, so its formatting belongs to all of it.
+                foreach (var fieldRun in piece.Field!.Runs)
                 {
                     ApplyRunFormatting(fieldRun, modelRun.Formatting);
                 }
@@ -237,7 +247,7 @@ internal static class RunEditor
     /// <summary>
     /// Produces one XML piece per model run, splitting XML runs where a model boundary falls inside
     /// one. Returns null when the two sides describe different text, in which case offsets are
-    /// meaningless and the caller falls back to positional rewriting.
+    /// meaningless and the caller falls back to source identity.
     /// </summary>
     private static List<RunPiece?>? Align(List<RunPiece> pieces, List<FormattedRun> modelRuns)
     {
@@ -373,8 +383,9 @@ internal static class RunEditor
 
         sourceRun.InsertAfterSelf(tailRun);
 
-        pieces[index] = new RunPiece { Run = sourceRun, Content = text, Text = head };
-        var tailPiece = new RunPiece { Run = tailRun, Content = tailText, Text = tail };
+        var original = pieces[index];
+        pieces[index] = new RunPiece { Run = sourceRun, Content = text, Text = head, Ordinal = original.Ordinal, Field = original.Field };
+        var tailPiece = new RunPiece { Run = tailRun, Content = tailText, Text = tail, Ordinal = original.Ordinal, Field = original.Field };
         pieces.Insert(index + 1, tailPiece);
 
         // The pieces for the moved children now belong to the trailing run. A run's pieces are
@@ -388,50 +399,214 @@ internal static class RunEditor
     }
 
     /// <summary>
-    /// Applies formatting positionally when offsets cannot be aligned, so containers survive even
-    /// though an exact character mapping is unavailable.
+    /// Reconciles edited slices by source identity and orders the resulting runs by the model.
     /// </summary>
     private static void RewriteWithoutAlignment(Paragraph paragraph, List<RunPiece> pieces, List<FormattedRun> modelRuns)
     {
-        var textPieces = pieces.FindAll(piece => piece.Content is Text);
-        var textRuns = modelRuns.FindAll(run => !run.IsTab && !run.IsBreak);
-
-        for (var i = 0; i < textRuns.Count && i < textPieces.Count; i++)
+        var survivors = new Dictionary<int, List<int>>();
+        var output = new List<Run>?[modelRuns.Count];
+        for (var i = 0; i < modelRuns.Count; i++)
         {
-            var target = (Text)textPieces[i].Content;
-            target.Text = textRuns[i].Text;
-            target.Space = SpaceProcessingModeValues.Preserve;
+            if (modelRuns[i].SourceOrdinal is not { } ordinal || ordinal < 0 || ordinal >= pieces.Count) continue;
+            if (!survivors.TryGetValue(ordinal, out var indices)) survivors[ordinal] = indices = [];
+            indices.Add(i);
+        }
 
-            if (textRuns[i].Formatting.HasChanges)
+        var fields = pieces.Where(piece => piece.Field is not null).GroupBy(piece => piece.Field!).ToList();
+        var fieldIndices = fields.ToDictionary(group => group.Key, group => group
+            .SelectMany(piece => survivors.GetValueOrDefault(piece.Ordinal) ?? []).Order().ToList());
+        RemoveFields(fields.Where(group => fieldIndices[group.Key].Count == 0).Select(group => group.Key));
+
+        foreach (var piece in pieces)
+        {
+            var indices = survivors.GetValueOrDefault(piece.Ordinal);
+            if (piece.Field is { } field && fieldIndices[field].Count == 0) continue;
+            if (piece.IsCollapsedField)
             {
-                ApplyRunFormatting(textPieces[i].Run, textRuns[i].Formatting);
+                // A collapsed property field retains its computed result and is formatted as a unit.
+                foreach (var index in indices ?? [])
+                {
+                    if (!modelRuns[index].Formatting.HasChanges) continue;
+                    foreach (var run in piece.Field!.Runs) ApplyRunFormatting(run, modelRuns[index].Formatting);
+                }
+                continue;
+            }
+
+            if (indices is null)
+            {
+                if (piece.Content is Text text) text.Text = string.Empty;
+                else piece.Content.Remove();
+                continue;
+            }
+
+            IsolatePiece(pieces, piece);
+            // Snapshot before styling the first slice; later slices inherit the original properties.
+            var template = indices.Count > 1 ? (Run)piece.Run.CloneNode(true) : null;
+            var previous = piece.Run;
+            foreach (var index in indices)
+            {
+                var run = index == indices[0] ? piece.Run : (Run)template!.CloneNode(true);
+                if (index != indices[0]) previous.InsertAfterSelf(run);
+                SetRunContent(run, modelRuns[index]);
+                output[index] = [run];
+                previous = run;
             }
         }
 
-        // Model gained runs: append them after the last existing run, inheriting its formatting.
-        for (var i = textPieces.Count; i < textRuns.Count; i++)
+        // Field delimiters travel with their results. Interleaving independent content into a field
+        // would change which text it computes, so reject that ambiguous structural edit.
+        foreach (var (field, indices) in fieldIndices)
         {
-            var run = new Run();
-            var template = textPieces.Count > 0 ? textPieces[^1].Run.RunProperties : null;
-            if (template is not null)
+            if (indices.Count == 0) continue;
+            if (indices[^1] - indices[0] + 1 != indices.Count)
             {
-                run.RunProperties = (RunProperties)template.CloneNode(true);
+                throw new DocumentPreservationException("paragraph runs", "A field's result runs must remain together.");
             }
-
-            if (textRuns[i].Formatting.HasChanges)
+            var results = indices.SelectMany(index => output[index] ?? []).ToArray();
+            var resultRuns = results.ToHashSet();
+            foreach (var index in indices) output[index] = null;
+            var runs = new List<Run>();
+            var resultIndex = 0;
+            for (OpenXmlElement? element = field.Runs[0]; element is not null; element = element.NextSibling())
             {
-                ApplyRunFormatting(run, textRuns[i].Formatting);
+                // Order cached result slices by the model while leaving the instruction and
+                // delimiter slots intact. Collapsed fields have no individually modeled results.
+                if (element is Run run) runs.Add(resultRuns.Contains(run) ? results[resultIndex++] : run);
+                if (ReferenceEquals(element, field.Runs[^1])) break;
             }
-
-            run.Append(new Text(textRuns[i].Text) { Space = SpaceProcessingModeValues.Preserve });
-            paragraph.Append(run);
+            output[indices[0]] = runs;
         }
 
-        // Model lost runs: empty the surplus rather than removing the runs, so any container or
-        // bookmark anchored to them stays put.
-        for (var i = textRuns.Count; i < textPieces.Count; i++)
+        var nextSources = new Run?[modelRuns.Count];
+        Run? next = null;
+        for (var i = modelRuns.Count - 1; i >= 0; i--)
         {
-            ((Text)textPieces[i].Content).Text = string.Empty;
+            nextSources[i] = next;
+            if (output[i] is { Count: > 0 } runs) next = runs[0];
+        }
+        Run? prior = null;
+        for (var i = 0; i < modelRuns.Count; i++)
+        {
+            if (modelRuns[i].SourceOrdinal is not { } ordinal || !survivors.ContainsKey(ordinal))
+            {
+                var run = new Run();
+                var template = prior?.RunProperties ?? nextSources[i]?.RunProperties;
+                if (template is not null) run.RunProperties = (RunProperties)template.CloneNode(true);
+                SetRunContent(run, modelRuns[i]);
+                // Insertions between two runs in the same container stay in that container.
+                var parent = prior?.Parent is OpenXmlCompositeElement container &&
+                             ReferenceEquals(container, nextSources[i]?.Parent) ? container : paragraph;
+                parent.Append(run);
+                output[i] = [run];
+            }
+            if (output[i] is { Count: > 0 } runs) prior = runs[^1];
+        }
+
+        var ranks = new Dictionary<OpenXmlElement, int>();
+        foreach (var runs in output)
+        {
+            foreach (var run in runs ?? []) ranks.Add(run, ranks.Count);
+        }
+        OrderRunContainers(paragraph, ranks);
+    }
+
+    /// <summary>Writes one model slice into an isolated run, retaining its original run properties.</summary>
+    private static void SetRunContent(Run run, FormattedRun model)
+    {
+        foreach (var child in run.ChildElements.Where(child => child is not RunProperties).ToList()) child.Remove();
+        if (model.IsTab) run.Append(new TabChar());
+        else if (model.IsBreak)
+        {
+            if (model.BreakType == "CarriageReturn") run.Append(new CarriageReturn());
+            else run.Append(new Break { Type = OoxmlEnum.Parse<BreakValues>(model.BreakType ?? "textWrapping") });
+        }
+        else run.Append(new Text(model.Text) { Space = SpaceProcessingModeValues.Preserve });
+        if (model.Formatting.HasChanges) ApplyRunFormatting(run, model.Formatting);
+    }
+
+    /// <summary>
+    /// Orders modeled children inside their existing containers. Unmodeled children retain their
+    /// slots, and container properties, relationships, bookmarks, and drawings remain intact.
+    /// </summary>
+    private static (int First, int Last)? OrderRunContainers(
+        OpenXmlElement element, Dictionary<OpenXmlElement, int> ranks)
+    {
+        if (ranks.TryGetValue(element, out var rank)) return (rank, rank);
+        if (element is Run || element is not OpenXmlCompositeElement container) return null;
+
+        var children = container.ChildElements.ToArray();
+        var ordered = new List<(OpenXmlElement Element, int First, int Last)>();
+        var slots = new List<int>();
+        var alreadyOrdered = true;
+        for (var i = 0; i < children.Length; i++)
+        {
+            if (OrderRunContainers(children[i], ranks) is not { } range) continue;
+            if (ordered.Count > 0 && ordered[^1].Last >= range.First) alreadyOrdered = false;
+            ordered.Add((children[i], range.First, range.Last));
+            slots.Add(i);
+        }
+        if (ordered.Count == 0) return null;
+        if (alreadyOrdered) return (ordered[0].First, ordered[^1].Last);
+        ordered.Sort((left, right) => left.First.CompareTo(right.First));
+        for (var i = 1; i < ordered.Count; i++)
+        {
+            if (ordered[i - 1].Last >= ordered[i].First)
+            {
+                throw new DocumentPreservationException("paragraph runs",
+                    "Run order interleaves distinct XML containers. Keep each container's runs together.");
+            }
+        }
+        var changed = false;
+        for (var i = 0; i < slots.Count; i++)
+        {
+            changed |= !ReferenceEquals(children[slots[i]], ordered[i].Element);
+            children[slots[i]] = ordered[i].Element;
+        }
+        if (changed)
+        {
+            container.RemoveAllChildren();
+            container.Append(children);
+        }
+        return (ordered[0].First, ordered[^1].Last);
+    }
+
+    /// <summary>
+    /// Returns true when a field's every piece is gone from the model, meaning the caller deleted it.
+    /// </summary>
+    /// <remarks>
+    /// Offsets alone cannot see this: a field whose result was empty leaves the paragraph's text
+    /// unchanged, so the aligned path would map cleanly and write the deleted field back out.
+    /// </remarks>
+    private static bool HasDeletedField(List<RunPiece> pieces, List<FormattedRun> modelRuns)
+    {
+        var fields = pieces.Where(piece => piece.Field is not null).ToList();
+        if (fields.Count == 0) return false;
+
+        var sourceOrdinals = modelRuns
+            .Where(run => run.SourceOrdinal.HasValue)
+            .Select(run => run.SourceOrdinal!.Value)
+            .ToHashSet();
+
+        return fields
+            .GroupBy(piece => piece.Field!)
+            .Any(field => !field.Any(piece => sourceOrdinals.Contains(piece.Ordinal)));
+    }
+
+    /// <summary>
+    /// Removes each distinct field construct in the sequence, delimiters and all.
+    /// </summary>
+    private static void RemoveFields(IEnumerable<FieldConstruct?> fields)
+    {
+        var removed = new HashSet<FieldConstruct>();
+
+        foreach (var field in fields)
+        {
+            if (field is null || !removed.Add(field)) continue;
+
+            foreach (var run in field.Runs)
+            {
+                run.Remove();
+            }
         }
     }
 
@@ -615,22 +790,7 @@ internal static class RunEditor
 
                         if (charType == FieldCharValues.End)
                         {
-                            if (fieldCode is not null && IsDocPropertyField(fieldCode) && resultRuns.Count > 0)
-                            {
-                                // The parser collapses a DOCPROPERTY field's result into one model
-                                // run, so collapse the pieces to match. The whole construct is kept
-                                // so formatting reaches every part of it and deletion removes it all.
-                                var collapsedText = string.Concat(
-                                    pieces.Skip(fieldPieceStart).Select(p => p.Text));
-                                pieces.RemoveRange(fieldPieceStart, pieces.Count - fieldPieceStart);
-                                pieces.Add(new RunPiece
-                                {
-                                    Run = resultRuns[0],
-                                    Content = resultRuns[0],
-                                    Text = collapsedText,
-                                    FieldRuns = [.. constructRuns]
-                                });
-                            }
+                            CloseField(pieces, fieldPieceStart, fieldCode, resultRuns, constructRuns);
 
                             inField = false;
                             fieldCode = null;
@@ -647,7 +807,7 @@ internal static class RunEditor
                         continue;
                     }
 
-                    if (inField && fieldCode is not null)
+                    if (inField)
                     {
                         resultRuns.Add(run);
                         constructRuns.Add(run);
@@ -672,7 +832,57 @@ internal static class RunEditor
             }
         }
 
+        // Assigned only once the field collapsing above has settled, so these line up with the
+        // ordinals the parser stamped on the model runs.
+        for (var i = 0; i < pieces.Count; i++)
+        {
+            pieces[i].Ordinal = i;
+        }
+
         return pieces;
+    }
+
+    /// <summary>
+    /// Attaches the field construct to the pieces its result produced, collapsing them into one when
+    /// the parser would have collapsed the model runs the same way.
+    /// </summary>
+    private static void CloseField(
+        List<RunPiece> pieces, int fieldPieceStart, string? fieldCode,
+        List<Run> resultRuns, List<Run> constructRuns)
+    {
+        if (constructRuns.Count == 0) return;
+
+        var collapse = fieldCode is not null && IsDocPropertyField(fieldCode);
+        var field = new FieldConstruct { Runs = [.. constructRuns], IsCollapsed = collapse };
+
+        if (collapse)
+        {
+            // The parser turns a DOCPROPERTY field's result into one model run, so collapse the
+            // pieces to match and keep the two sides aligned.
+            var collapsedText = string.Concat(pieces.Skip(fieldPieceStart).Select(p => p.Text));
+            pieces.RemoveRange(fieldPieceStart, pieces.Count - fieldPieceStart);
+            pieces.Add(new RunPiece
+            {
+                Run = resultRuns.FirstOrDefault() ?? constructRuns[0],
+                Content = resultRuns.FirstOrDefault() ?? constructRuns[0],
+                Text = collapsedText,
+                Field = field
+            });
+            return;
+        }
+
+        // Every other field keeps one piece per result element, but each still belongs to the
+        // construct — so deleting its text deletes the field rather than emptying its result.
+        for (var i = fieldPieceStart; i < pieces.Count; i++)
+        {
+            pieces[i] = new RunPiece
+            {
+                Run = pieces[i].Run,
+                Content = pieces[i].Content,
+                Text = pieces[i].Text,
+                Field = field
+            };
+        }
     }
 
     private static void AddPieces(List<RunPiece> pieces, Run run)

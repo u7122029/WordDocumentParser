@@ -204,17 +204,27 @@ public class WordDocumentTreeParser : IDocumentParser
             IgnoreComments = true,
             IgnoreWhitespace = true,
             IgnoreProcessingInstructions = true,
-            CloseInput = false
+            CloseInput = false,
+
+            // The scan reads whole parts, so it needs the same character budget as every other read.
+            // Without it a single huge attribute is buffered in full here, before the bounded reader
+            // downstream ever gets to reject it.
+            MaxCharactersInDocument = Limits.MaxCharactersInPart,
+            MaxCharactersFromEntities = Limits.MaxCharactersInPart
         };
 
         foreach (var part in EnumerateParts(document))
         {
-            if (!part.ContentType.Contains("xml", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!IsXmlContentType(part.ContentType)) continue;
 
             try
             {
+                var encoding = XmlPartEncoding.Detect(part, Limits.MaxCharactersInPart);
                 using var stream = part.GetStream(FileMode.Open, FileAccess.Read);
-                using var reader = XmlReader.Create(stream, settings);
+                using var text = new StreamReader(stream, encoding, detectEncodingFromByteOrderMarks: false);
+                // Count decoded characters, with an explicit exception distinct from malformed XML.
+                using var bounded = new BoundedTextReader(text, Limits.MaxCharactersInPart, part.Uri.ToString());
+                using var reader = XmlReader.Create(bounded, settings);
 
                 while (reader.Read())
                 {
@@ -225,11 +235,85 @@ public class WordDocumentTreeParser : IDocumentParser
                     }
                 }
             }
-            catch (XmlException ex)
+            catch (Exception ex) when (ex is XmlException or System.Text.DecoderFallbackException)
             {
                 throw new DocumentPreservationException(
                     part.Uri.ToString(), "Part is not well-formed XML.", ex);
             }
+        }
+    }
+
+    /// <summary>
+    /// Returns true for media types that actually carry XML.
+    /// </summary>
+    /// <remarks>
+    /// Matched against the registered forms — <c>application/xml</c>, <c>text/xml</c>, and the
+    /// <c>+xml</c> suffix — rather than by searching for the substring, which also matched packaged
+    /// formats such as <c>…spreadsheetml.sheet</c>. Those are ZIP archives, and scanning one as XML
+    /// rejected any document with an embedded workbook.
+    /// </remarks>
+    private static bool IsXmlContentType(string contentType)
+    {
+        var mediaType = contentType.AsSpan();
+
+        var parameterStart = mediaType.IndexOf(';');
+        if (parameterStart >= 0) mediaType = mediaType[..parameterStart];
+        mediaType = mediaType.Trim();
+
+        return mediaType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.Equals("application/xml", StringComparison.OrdinalIgnoreCase) ||
+               mediaType.Equals("text/xml", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A pass-through reader that stops the parser as soon as a part exceeds its character budget.
+    /// </summary>
+    /// <param name="inner">The reader supplying the part's text.</param>
+    /// <param name="maxCharacters">The budget, or 0 for unlimited.</param>
+    /// <param name="target">The part being read, for the error message.</param>
+    private sealed class BoundedTextReader(TextReader inner, long maxCharacters, string target) : TextReader
+    {
+        private long _charactersRead;
+
+        public override int Read()
+        {
+            var value = inner.Read();
+            if (value >= 0) Count(1);
+            return value;
+        }
+
+        public override int Read(char[] buffer, int index, int count)
+        {
+            var read = inner.Read(buffer, index, count);
+            Count(read);
+            return read;
+        }
+
+        public override int Read(Span<char> buffer)
+        {
+            var read = inner.Read(buffer);
+            Count(read);
+            return read;
+        }
+
+        public override int Peek() => inner.Peek();
+
+        private void Count(int read)
+        {
+            if (read <= 0 || maxCharacters <= 0) return;
+
+            _charactersRead += read;
+            if (_charactersRead > maxCharacters)
+            {
+                throw new DocumentLimitExceededException(
+                    $"Document exceeds the limit of {maxCharacters} characters in a part (reading {target}).");
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) inner.Dispose();
+            base.Dispose(disposing);
         }
     }
 
@@ -824,6 +908,14 @@ public class WordDocumentTreeParser : IDocumentParser
                     // Skip these elements
                     break;
             }
+        }
+
+        // Stamp each run with its position here, as its identity. The writer enumerates the same
+        // paragraph the same way, so a run the caller kept can be matched to the piece it came from
+        // however much the collection was reordered, split, or thinned out in between.
+        for (var i = 0; i < formattedRuns.Count; i++)
+        {
+            formattedRuns[i].SourceOrdinal = i;
         }
 
         return formattedRuns;

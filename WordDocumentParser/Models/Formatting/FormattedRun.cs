@@ -59,6 +59,18 @@ public class FormattedRun : TrackedModel
     /// <summary>Whether this run sits inside a content control.</summary>
     public bool IsContentControlRun => ContentControlProperties is not null;
 
+    /// <summary>
+    /// Position of the run this one came from within its source paragraph, or null when the run was
+    /// created in code rather than parsed.
+    /// </summary>
+    /// <remarks>
+    /// This is the run's identity, and it survives edits, splits, and clones. The writer uses it to
+    /// tell which of a paragraph's original runs a caller kept and which they removed. Matching by
+    /// position instead cannot tell the difference: removing the first of two fields looks exactly
+    /// like removing the second, so the wrong one gets deleted.
+    /// </remarks>
+    public int? SourceOrdinal { get; set; }
+
     /// <summary>True when the caller assigned this run's text.</summary>
     public bool IsTextChanged => IsChanged(nameof(Text));
 
@@ -115,7 +127,10 @@ public class FormattedRun : TrackedModel
             _isBreak = _isBreak,
             _breakType = _breakType,
             _documentPropertyField = _documentPropertyField?.Clone(),
-            _contentControlProperties = _contentControlProperties?.Clone()
+            _contentControlProperties = _contentControlProperties?.Clone(),
+
+            // A copy still stands for the same source run, so it keeps its identity.
+            SourceOrdinal = SourceOrdinal
         };
         clone.CopyChangesFrom(this);
         return clone;

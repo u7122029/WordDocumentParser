@@ -33,6 +33,7 @@ Because the source package is edited rather than rebuilt, anything you do not to
 - **Documents built in code have no source package.** A @WordDocumentParser.WordDocument you construct yourself is assembled from the model, so only what the model represents ends up in the file.
 - **`CaptureOriginalPackage = false`** trades preservation for memory: saving then reassembles from the model alone.
 - **Merging is not a package merge.** @WordDocumentParser.Extensions.DocumentMergeExtensions brings the source's body content, images, hyperlinks, and numbering definitions across. The source's styles, theme, headers, and footers are not merged — the target's are used, so content relying on a style the target lacks will render with the target's defaults.
+- **Run order preserves container membership.** Inserting, deleting, splitting, or reordering `Runs` keeps each surviving run's source formatting and container. Call `MarkRunsChanged()` after changing the list directly. New runs inserted between two runs in the same container join that container; other new runs belong to the paragraph. A field's result runs must stay together, and runs from distinct containers must not be interleaved. Such edits throw `DocumentPreservationException` because they cannot preserve the existing container structure.
 
 ## Failure Behaviour
 

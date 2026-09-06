@@ -482,6 +482,26 @@ dotnet run --project WordDocumentParser.Demo -- path/to/document.docx
 
 CI builds with `-warnaserror`. `GenerateDocumentationFile` is on, so a public member without XML documentation fails the build.
 
+## Documentation
+
+The HTML docs are generated with [DocFX](https://dotnet.github.io/docfx/) from `docs/`. To preview them locally:
+
+```bash
+# Install DocFX (once)
+dotnet tool install -g docfx
+
+# Build the site and start a local web server
+docfx docs/docfx.json --serve
+```
+
+Then open [http://localhost:8080](http://localhost:8080) in your browser. Press `Ctrl+C` in the terminal to stop the server.
+
+Use `--port` if 8080 is already taken, or add `--open-browser` to launch the site automatically:
+
+```bash
+docfx docs/docfx.json --serve --port 8081 --open-browser
+```
+
 ## License
 
 See [LICENSE](LICENSE) for details.
